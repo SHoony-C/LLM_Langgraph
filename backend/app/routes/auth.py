@@ -1,0 +1,777 @@
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+from datetime import timedelta
+import uuid
+import json
+from jose import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+import httpx
+
+from ..database import get_db
+from ..models import User
+from ..schemas import UserCreate, User as UserSchema, Token, SSOModel, UserMap
+from ..utils.auth import (
+    authenticate_user, 
+    create_access_token, 
+    get_password_hash, 
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    get_current_user
+)
+from ..utils import config
+
+router = APIRouter()
+
+@router.post("/register", response_model=UserSchema)
+def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
+    """새 사용자 등록"""
+    # 기존 사용자 확인
+    db_user = db.query(User).filter(User.username == user_data.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    db_mail = db.query(User).filter(User.mail == user_data.mail).first()
+    if db_mail:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # 새 사용자 생성
+    hashed_password = get_password_hash(user_data.password)
+    db_user = User(
+        username=user_data.username,
+        mail=user_data.mail,
+        hashed_password=hashed_password
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+@router.post("/refresh", response_model=Token)
+async def refresh_access_token(request: Request, db: Session = Depends(get_db)):
+    """토큰 갱신"""
+    try:
+        # Authorization 헤더에서 토큰 추출
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header"
+            )
+        
+        token = auth_header.split(' ')[1]
+        
+        # 토큰 검증 (만료 여부는 무시)
+        try:
+            payload = jwt.decode(
+                token, 
+                config.SECRET_KEY, 
+                algorithms=["HS256"],
+                options={"verify_exp": False}  # 만료 시간 검증 비활성화
+            )
+            username = payload.get("sub")
+            if username is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token"
+                )
+        except jwt.JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+        
+        # 사용자 확인
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        # 새 토큰 생성
+        access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        
+        print(f"[AUTH] 토큰 갱신 성공: {username}")
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH] 토큰 갱신 중 오류: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+@router.post("/token", response_model=Token)
+async def login_for_access_token(request: Request, db: Session = Depends(get_db)):
+    """로그인 및 토큰 발급"""
+    is_sso = False
+    body = {}
+    
+    try:
+        # 요청 본문 가져오기 (JSON 형식)
+        try:
+            body = await request.json()
+            is_sso = body.get('is_sso', False)
+        except:
+            # JSON이 아닌 경우 form 데이터로 시도
+            body = {}
+            is_sso = False
+        
+        # SSO 로그인 처리
+        if is_sso:
+            id_token_val = body.get('id_token')
+            access_token_val = body.get('access_token')
+            username = body.get('username', '')
+            
+            if not id_token_val:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="id_token is required for SSO authentication"
+                )
+            
+            # JWT 디코딩 (모든 검증 비활성화)
+            try:
+                decode_options = {
+                    "verify_signature": False,
+                    "verify_aud": False, 
+                    "verify_exp": False,
+                    "verify_nbf": False,
+                    "verify_iat": False,
+                    "verify_iss": False,
+                    "verify_sub": False,
+                    "verify_jti": False,
+                    "verify_at_hash": False
+                }
+                
+                decoded_token = jwt.decode(id_token_val, "", options=decode_options)
+                
+                # 사용자 정보 추출
+                username = decoded_token.get('name', username)
+                mail = decoded_token.get('email', '')
+                loginid = decoded_token.get('sub')
+                
+                if not username:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Username is required"
+                    )
+                
+                # 기존 사용자 확인 또는 생성
+                db_user = db.query(User).filter(User.username == username).first()
+                
+                if not db_user:
+                    # 새 사용자 생성
+                    hashed_password = get_password_hash(str(uuid.uuid4()))  # 임의 비밀번호 생성
+                    db_user = User(
+                        username=username,
+                        mail=mail,
+                        hashed_password=hashed_password,
+                        loginid=loginid
+                    )
+                    db.add(db_user)
+                    db.commit()
+                    db.refresh(db_user)
+                else:
+                    # 기존 사용자 로그인 시 loginid 업데이트
+                    if loginid and db_user.loginid != loginid:
+                        db_user.loginid = loginid
+                        db.commit()
+                        db.refresh(db_user)
+                
+                # JWT 토큰 생성
+                access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                access_token = create_access_token(
+                    data={"sub": db_user.username}, 
+                    expires_delta=access_token_expires
+                )
+                
+                return {"access_token": access_token, "token_type": "bearer"}
+                
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Invalid SSO token: {str(e)}"
+                )
+        
+        # 일반 로그인 처리
+        try:
+            form_data = OAuth2PasswordRequestForm(
+                username=body.get('username', ''),
+                password=body.get('password', '')
+            )
+        except:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username and password are required"
+            )
+        
+        user = authenticate_user(db, form_data.username, form_data.password)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/me", response_model=UserSchema)
+async def read_users_me(request: Request, current_user: User = Depends(get_current_user)):
+    """현재 로그인된 사용자 정보 조회"""
+    return current_user
+
+    # Google OAuth 시작
+@router.get('/auth_sh')
+@router.head('/auth_sh')  # HEAD 메서드 지원 추가
+async def auth_sh():
+    import secrets
+    import urllib.parse
+    
+    client_id = config.IDP_Config['ClientId']
+    redirect_uri = config.IDP_Config['RedirectUri']
+    scopes = config.IDP_Config['Scopes']
+    
+    # nonce와 state 생성 (보안을 위해)
+    nonce = secrets.token_hex(16)
+    state = secrets.token_hex(16)
+    
+    # Google OAuth 매개변수 (Public Client - Implicit Flow)
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "id_token",  # Public Client는 id_token 사용
+        "scope": scopes,
+        "state": state,
+        "nonce": nonce,
+        "prompt": "select_account"  # 항상 계정 선택 화면 표시
+    }
+    
+    # URL 생성 - AuthorizeUrl 사용
+    auth_url = f"{config.IDP_Config['AuthorizeUrl']}?{urllib.parse.urlencode(params)}"
+    
+    return RedirectResponse(url=auth_url)
+
+# 복호화 및 사용자 인증
+@router.post('/acs')
+@router.get('/acs')
+@router.options('/acs')  # OPTIONS 요청 처리 추가
+async def acs(request: Request):
+    # OPTIONS 요청 처리 (preflight)
+    if request.method == "OPTIONS":
+        from fastapi.responses import Response
+        response = Response()
+        response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+    
+    # POST 요청 처리 (프론트엔드에서 id_token 전송)
+    if request.method == "POST":
+        try:
+            # 요청 본문에서 id_token 추출
+            body = await request.body()
+            body_text = body.decode('utf-8')
+            
+            # URL 인코딩된 파라미터 파싱
+            params = {}
+            try:
+                for param in body_text.split('&'):
+                    if '=' in param:
+                        key, value = param.split('=', 1)
+                        params[key] = value
+            except Exception as parse_error:
+                pass
+            
+            id_token = params.get('id_token')
+            state = params.get('state')
+            
+            if id_token and state:
+                try:
+                    # ID 토큰 디코딩 (검증 없이)
+                    decoded_token = jwt.decode(
+                        id_token,
+                        "",
+                        options={
+                            "verify_signature": False,
+                            "verify_aud": False,
+                            "verify_exp": False,
+                            "verify_nbf": False,
+                            "verify_iat": False,
+                            "verify_iss": False,
+                            "verify_sub": False,
+                            "verify_jti": False,
+                            "verify_at_hash": False
+                        }
+                    )
+                    
+                    # 사용자 정보 추출
+                    username = decoded_token.get('name', '')
+                    mail = decoded_token.get('email')
+                    loginid = decoded_token.get('sub')
+                    print(f"Extracted user info - username: '{username}', mail: '{mail}', loginid: '{loginid}'")
+
+                    if not username or not loginid:
+                        return RedirectResponse(
+                            url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Missing+user+information",
+                            status_code=303
+                        )
+                    
+                    # 데이터베이스 사용자 생성 또는 조회
+                    db = next(get_db())
+                    db_user = db.query(User).filter(User.loginid == loginid).first()
+                    
+                    if not db_user:
+                        # 새 사용자 생성
+                        hashed_password = get_password_hash(str(uuid.uuid4()))
+                        db_user = User(
+                            username=username,
+                            mail=mail or "",
+                            hashed_password=hashed_password,
+                            loginid=loginid
+                        )
+                        db.add(db_user)
+                        db.commit()
+                        db.refresh(db_user)
+                    else:
+                        # 기존 사용자 정보 업데이트
+                        if mail and db_user.mail != mail:
+                            db_user.mail = mail
+                        if username and db_user.username != username:
+                            db_user.username = username
+                        db.commit()
+                        db.refresh(db_user)
+                    
+                    # JWT 토큰 생성
+                    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                    access_token = create_access_token(
+                        data={"sub": db_user.username}, 
+                        expires_delta=access_token_expires
+                    )
+                    
+                    # 프론트엔드로 JSON 응답 반환 (리다이렉트 대신)
+                    from fastapi.responses import JSONResponse
+                    
+                    # 응답 생성
+                    response = JSONResponse(
+                        content={
+                            "success": True,
+                            "message": "Authentication successful",
+                            "access_token": access_token,
+                            "user": {
+                                "username": db_user.username,
+                                "mail": db_user.mail or "",
+                                "loginid": db_user.loginid or "",
+                                "userid": db_user.id
+                            }
+                        },
+                        status_code=200
+                    )
+                    
+                    # CORS 헤더 설정
+                    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                    
+                    # 토큰은 응답 본문에만 포함 (쿠키 제거)
+                    # 프론트엔드에서 localStorage에 저장하도록 함
+                    # 보안을 위해 쿠키에 저장하지 않음
+                    
+                    return response
+                    
+                except Exception as e:
+                    return RedirectResponse(
+                        url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Token+processing+failed&msg={str(e)}",
+                        status_code=303
+                    )
+            else:
+                return RedirectResponse(
+                    url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Missing+OAuth+parameters",
+                    status_code=303
+                )
+                
+        except Exception as e:
+            return RedirectResponse(
+                url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Request+processing+failed&msg={str(e)}",
+                status_code=303
+            )
+    
+    # GET 요청 처리 (Google OAuth 콜백)
+    if request.method == "GET":
+        try:
+            # URL 파라미터에서 OAuth 코드 또는 id_token 추출
+            code = request.query_params.get('code')
+            id_token = request.query_params.get('id_token')  # Implicit Flow에서 직접 받음
+            state = request.query_params.get('state')
+            error = request.query_params.get('error')
+            
+            if error:
+                print(f"OAuth error received: {error}")
+                return RedirectResponse(
+                    url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error={error}",
+                    status_code=303
+                )
+            
+            # Implicit Flow: id_token을 직접 받은 경우
+            if id_token and state:
+                try:
+                    # ID 토큰 디코딩 (검증 없이)
+                    decoded_token = jwt.decode(
+                        id_token,
+                        "",
+                        options={
+                            "verify_signature": False,
+                            "verify_aud": False,
+                            "verify_exp": False,
+                            "verify_nbf": False,
+                            "verify_iat": False,
+                            "verify_iss": False,
+                            "verify_sub": False,
+                            "verify_jti": False,
+                            "verify_at_hash": False
+                        }
+                    )
+                    
+                    # 사용자 정보 추출
+                    username = decoded_token.get('name', '')
+                    mail = decoded_token.get('email')
+                    loginid = decoded_token.get('sub')
+
+                    
+                    
+                    if not username or not loginid:
+                        return RedirectResponse(
+                            url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Missing+user+information",
+                            status_code=303
+                        )
+                    
+                    # 데이터베이스 사용자 생성 또는 조회
+                    db = next(get_db())
+                    db_user = db.query(User).filter(User.loginid == loginid).first()
+                    
+                    if not db_user:
+                        # 새 사용자 생성
+                        hashed_password = get_password_hash(str(uuid.uuid4()))
+                        db_user = User(
+                            username=username,
+                            mail=mail or "",
+                            hashed_password=hashed_password,
+                            loginid=loginid
+                        )
+                        db.add(db_user)
+                        db.commit()
+                        db.refresh(db_user)
+                    else:
+                        # 기존 사용자 정보 업데이트
+                        if mail and db_user.mail != mail:
+                            db_user.mail = mail
+                        if username and db_user.username != username:
+                            db_user.username = username
+                        db.commit()
+                        db.refresh(db_user)
+                    
+                    # JWT 토큰 생성
+                    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                    access_token = create_access_token(
+                        data={"sub": db_user.username}, 
+                        expires_delta=access_token_expires
+                    )
+                    
+                    # 프론트엔드로 JSON 응답 반환 (리다이렉트 대신)
+                    from fastapi.responses import JSONResponse
+                    
+                    # 응답 생성
+                    response = JSONResponse(
+                        content={
+                            "success": True,
+                            "message": "Authentication successful",
+                            "access_token": access_token,
+                            "user": {
+                                "username": db_user.username,
+                                "mail": db_user.mail or "",
+                                "loginid": db_user.loginid or "",
+                                "userid": db_user.id
+                            }
+                        },
+                        status_code=200
+                    )
+                    
+                    # CORS 헤더 설정
+                    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                    
+                    # 토큰을 쿠키에 설정 (프론트엔드 접근을 위해 HttpOnly=False)
+                    response.set_cookie(
+                        key="access_token",
+                        value=access_token,
+                        httponly=False,  # 프론트엔드에서 접근 가능하도록 False
+                        secure=False,  # localhost에서는 False, 프로덕션에서는 True
+                        samesite="lax",
+                        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                    )
+                    
+                    # 사용자 정보도 쿠키에 설정 (JSON 문자열 이스케이프 처리)
+                    user_info_json = json.dumps({
+                        "username": db_user.username,
+                        "mail": db_user.mail or "",
+                        "loginid": db_user.loginid or "",
+                        "userid": db_user.id
+                    }, ensure_ascii=False, separators=(',', ':'), default=str)
+                    
+                    # 쿠키 값이 너무 길어지지 않도록 사용자 정보를 간소화
+                    user_info_cookie = f"username={db_user.username}&mail={db_user.mail or ''}&loginid={db_user.loginid or ''}&userid={db_user.id}"
+                    
+                    response.set_cookie(
+                        key="user_info",
+                        value=user_info_cookie,
+                        httponly=False,  # 프론트엔드에서 접근 가능하도록 False
+                        secure=False,
+                        samesite="lax",
+                        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                    )
+                    
+                    return response
+                    
+                except Exception as e:
+                    return RedirectResponse(
+                        url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Token+processing+failed&msg={str(e)}",
+                        status_code=303
+                    )
+            
+            # Authorization Code Flow: code를 받은 경우 (기존 로직)
+            elif code and state:
+                # Google OAuth 토큰 교환
+                try:
+                    token_url = config.IDP_Config.get('TokenEndpoint', 'https://oauth2.googleapis.com/token')
+                    token_data = {
+                        "client_id": config.IDP_Config['ClientId'],
+                        "code": code,
+                        "grant_type": "authorization_code",
+                        "redirect_uri": config.IDP_Config['RedirectUri']
+                    }
+                    
+                    # Public Client인 경우 Client Secret 없이 처리
+                    if config.IDP_Config.get('UsePublicClient', False):
+                        pass
+                    else:
+                        # Client Secret이 설정된 경우에만 추가
+                        if config.IDP_Config.get('ClientSecret') and config.IDP_Config['ClientSecret'].strip():
+                            token_data["client_secret"] = config.IDP_Config['ClientSecret']
+                        else:
+                            pass
+                    
+                    import httpx
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(token_url, data=token_data)
+                        
+                        if response.status_code != 200:
+                            # Public Client에서 Client Secret 오류가 발생한 경우
+                            if "client_secret is missing" in response.text:
+                                return RedirectResponse(
+                                    url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=OAuth+configuration+error&details=Public+Client+setup+required",
+                                    status_code=303
+                                )
+                            
+                            return RedirectResponse(
+                                url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Token+exchange+failed&details={response.text}",
+                                status_code=303
+                            )
+                    
+                    token_response = response.json()
+                    id_token = token_response.get('id_token')
+                    
+                    if not id_token:
+                        return RedirectResponse(
+                            url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=No+ID+token+received",
+                            status_code=303
+                        )
+                    
+                    # ID 토큰 디코딩 (검증 없이)
+                    decoded_token = jwt.decode(
+                        id_token,
+                        "",
+                        options={
+                            "verify_signature": False,
+                            "verify_aud": False,
+                            "verify_exp": False,
+                            "verify_nbf": False,
+                            "verify_iat": False,
+                            "verify_iss": False,
+                            "verify_sub": False,
+                            "verify_jti": False,
+                            "verify_at_hash": False
+                        }
+                    )
+                    
+                    # 사용자 정보 추출
+                    username = decoded_token.get('name', '')
+                    mail = decoded_token.get('email')
+                    loginid = decoded_token.get('sub')
+                    
+                    if not username or not loginid:
+                        return RedirectResponse(
+                            url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Missing+user+information",
+                            status_code=303
+                        )
+                    
+                    # 데이터베이스 사용자 생성 또는 조회
+                    db = next(get_db())
+                    db_user = db.query(User).filter(User.loginid == loginid).first()
+                    
+                    if not db_user:
+                        # 새 사용자 생성
+                        hashed_password = get_password_hash(str(uuid.uuid4()))
+                        db_user = User(
+                            username=username,
+                            mail=mail or "",
+                            hashed_password=hashed_password,
+                            loginid=loginid
+                        )
+                        db.add(db_user)
+                        db.commit()
+                        db.refresh(db_user)
+                    else:
+                        # 기존 사용자 정보 업데이트
+                        if mail and db_user.mail != mail:
+                            db_user.mail = mail
+                        if username and db_user.username != username:
+                            db_user.username = username
+                        db.commit()
+                        db.refresh(db_user)
+                    
+                    # JWT 토큰 생성
+                    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                    access_token = create_access_token(
+                        data={"sub": db_user.username}, 
+                        expires_delta=access_token_expires
+                    )
+                    
+                    # 프론트엔드로 JSON 응답 반환 (리다이렉트 대신) - Authorization Code Flow
+                    from fastapi.responses import JSONResponse
+                    
+                    # 응답 생성
+                    response = JSONResponse(
+                        content={
+                            "success": True,
+                            "message": "Authentication successful",
+                            "access_token": access_token,
+                            "user": {
+                                "username": db_user.username,
+                                "mail": db_user.mail or "",
+                                "loginid": db_user.loginid or "",
+                                "userid": db_user.id
+                            }
+                        },
+                        status_code=200
+                    )
+                    
+                    # CORS 헤더 설정
+                    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                    
+                    # 토큰을 쿠키에 설정 (프론트엔드 접근을 위해 HttpOnly=False)
+                    response.set_cookie(
+                        key="access_token",
+                        value=access_token,
+                        httponly=False,  # 프론트엔드에서 접근 가능하도록 False
+                        secure=False,  # localhost에서는 False, 프로덕션에서는 True
+                        samesite="lax",
+                        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                    )
+                    
+                    # 사용자 정보도 쿠키에 설정 (JSON 문자열 이스케이프 처리)
+                    user_info_json = json.dumps({
+                        "username": db_user.username,
+                        "mail": db_user.mail or "",
+                        "loginid": db_user.loginid or "",
+                        "userid": db_user.id
+                    }, ensure_ascii=False, separators=(',', ':'), default=str)
+                    
+                    # 쿠키 값이 너무 길어지지 않도록 사용자 정보를 간소화
+                    user_info_cookie = f"username={db_user.username}&mail={db_user.mail or ''}&loginid={db_user.loginid or ''}&userid={db_user.id}"
+                    
+                    response.set_cookie(
+                        key="user_info",
+                        value=user_info_cookie,
+                        httponly=False,  # 프론트엔드에서 접근 가능하도록 False
+                        secure=False,
+                        samesite="lax",
+                        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                    )
+                    
+                    return response
+                    
+                except Exception as e:
+                    return RedirectResponse(
+                        url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=OAuth+processing+failed&msg={str(e)}",
+                        status_code=303
+                    )
+            
+            # OAuth 코드가 없는 경우 기본 리다이렉트
+            return RedirectResponse(url=config.IDP_Config['Frontend_Redirect_Uri'], status_code=303)
+            
+        except Exception as e:
+            return RedirectResponse(
+                url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Authentication+failed&msg={str(e)}", 
+                status_code=303
+            )
+    
+    # 기본 응답 (POST나 GET이 아닌 경우)
+    return RedirectResponse(url=config.IDP_Config['Frontend_Redirect_Uri'], status_code=303)
+
+# 쿠키에서 토큰 및 사용자 정보 조회
+@router.get('/cookie-info')
+async def get_cookie_info(request: Request):
+    """쿠키에서 토큰 및 사용자 정보를 조회하는 엔드포인트"""
+    access_token = request.cookies.get('access_token')
+    user_info_cookie = request.cookies.get('user_info')
+    
+    if not access_token or not user_info_cookie:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No authentication cookies found"
+        )
+    
+    try:
+        user_info = json.loads(user_info_cookie)
+        return {
+            "access_token": access_token,
+            "user_info": user_info
+        }
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user info cookie format"
+        )
+
+# 로그아웃
+@router.get('/slo')
+async def slo():
+    idp_url = config.IDP_Config['Idp.SignoutUrl']
+    response = RedirectResponse(url=idp_url)
+    return response 

@@ -1,0 +1,19 @@
+/* 모바일 화면에서의 레이아웃 조정 */
+@media (max-width: 768px) {
+  .main {
+    width: 100%;
+    padding-left: 0;
+  }
+  
+  .header {
+    padding: 12px 12px;
+  }
+  
+  .title {
+    display: none;
+  }
+  
+  .user-profile {
+    right: 12px;
+  }
+}
