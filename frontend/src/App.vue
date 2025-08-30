@@ -387,12 +387,24 @@ export default {
       console.log('대화 선택됨:', {
         conversationId: conversation.id,
         conversationTitle: this.getConversationTitle(conversation),
-        messageCount: conversation.messages?.length || 0
+        messageCount: conversation.messages?.length || 0,
+        messages: conversation.messages?.map(m => ({
+          id: m.id,
+          role: m.role,
+          q_mode: m.q_mode,
+          question: m.question?.substring(0, 50) + '...',
+          hasAns: !!m.ans
+        })) || []
       });
       
       // 대화를 store에 설정 (랭그래프 복원 트리거)
       this.$store.commit('setCurrentConversation', conversation);
       this.$store.commit('setShouldScrollToBottom', true);
+      
+      console.log('setCurrentConversation 호출 완료, store 상태:', {
+        currentConversation: this.$store.state.currentConversation,
+        hasMessages: this.$store.state.currentConversation?.messages?.length > 0
+      });
     },
     async saveLlamaApiSettings() {
       try {
@@ -881,8 +893,24 @@ export default {
     
     // 인증 토큰 유효성 검사 (localStorage의 JWT 토큰 확인)
     const jwtToken = localStorage.getItem('access_token');
-    if (jwtToken && this.$store.state.isAuthenticated) {
-      this.validateAuthToken();
+    const userInfo = localStorage.getItem('user_info');
+    
+    if (jwtToken && userInfo) {
+      try {
+        const userData = JSON.parse(userInfo);
+        // store 상태와 localStorage 동기화
+        if (!this.$store.state.isAuthenticated) {
+          this.$store.commit('setAuth', {
+            token: jwtToken,
+            user: userData
+          });
+        }
+        this.validateAuthToken();
+      } catch (error) {
+        console.error('Stored user info parsing error:', error);
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('user_info');
+      }
     }
     
     // Add click event listener to close dropdowns when clicking outside

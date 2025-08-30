@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from pydantic import ValidationError
 from ..database import get_db
 from ..models import Message, Conversation, User
 from ..schemas import FeedbackRequest, MessageCreate, MessageResponse
@@ -56,7 +58,7 @@ def create_message(conversation_id: int, message: MessageCreate, db: Session = D
     print(f"[DB_SAVE] 요청된 user_name: {message.user_name}")
     print(f"[DB_SAVE] 전체 요청 데이터: {message}")
     print(f"[DB_SAVE] 질문: {message.question}")
-    print(f"[DB_SAVE] 답변: {message.assistant_response[:100] if message.assistant_response else 'None'}...")
+    print(f"[DB_SAVE] 답변: {message.ans[:100] if message.ans else 'None'}...")
     print(f"[DB_SAVE] q_mode: {message.q_mode}")
     print(f"[DB_SAVE] 키워드: {message.keyword}")
     print(f"[DB_SAVE] 문서제목: {message.db_search_title}")
@@ -84,7 +86,14 @@ def create_message(conversation_id: int, message: MessageCreate, db: Session = D
         if not question:
             raise HTTPException(status_code=400, detail="Question cannot be empty")
         
-        assistant_response = message.assistant_response.strip() if message.assistant_response else ""
+        # ans 필드나 assistant_response 필드 중 하나를 사용
+        ans = ""
+        if message.ans:
+            ans = message.ans.strip()
+        elif hasattr(message, 'assistant_response') and message.assistant_response:
+            ans = message.assistant_response.strip()
+        else:
+            ans = ""
         q_mode = message.q_mode or "search"  # 기본값은 search
         keyword = message.keyword
         db_search_title = message.db_search_title
@@ -99,58 +108,79 @@ def create_message(conversation_id: int, message: MessageCreate, db: Session = D
                     if isinstance(parsed_keywords, list):
                         keyword = keyword  # 유효한 JSON 문자열이면 그대로 사용
                     else:
-                        keyword = str(keyword)  # 파싱 실패 시 문자열로 변환
+                        keyword = "[]"  # 빈 배열 문자열
                 else:
-                    keyword = str(keyword)  # 일반 문자열이면 그대로 사용
-            except (json.JSONDecodeError, ValueError):
-                keyword = str(keyword)  # JSON 파싱 실패 시 문자열로 변환
+                    keyword = "[]"  # 빈 배열 문자열
+            except (json.JSONDecodeError, Exception) as e:
+                print(f"[WARNING] 키워드 파싱 실패, 빈 배열로 설정: {e}")
+                keyword = "[]"
+        elif keyword is None:
+            keyword = "[]"
         
-        # Create a single message with both question and answer
-        # user_name은 프론트엔드에서 전달받은 값만 사용 (하드코딩 방지)
-        single_message = Message(
+        # db_search_title 데이터 처리
+        if db_search_title and isinstance(db_search_title, str):
+            try:
+                if db_search_title.startswith('[') and db_search_title.endswith(']'):
+                    import json
+                    parsed_titles = json.loads(db_search_title)
+                    if isinstance(parsed_titles, list):
+                        db_search_title = db_search_title
+                    else:
+                        db_search_title = "[]"
+                else:
+                    db_search_title = "[]"
+            except (json.JSONDecodeError, Exception) as e:
+                print(f"[WARNING] 문서 제목 파싱 실패, 빈 배열로 설정: {e}")
+                db_search_title = "[]"
+        elif db_search_title is None:
+            db_search_title = "[]"
+        
+        print(f"[DB_SAVE] 최종 데이터:")
+        print(f"[DB_SAVE] question: {question}")
+        print(f"[DB_SAVE] ans: {ans}")
+        print(f"[DB_SAVE] q_mode: {q_mode}")
+        print(f"[DB_SAVE] keyword: {keyword}")
+        print(f"[DB_SAVE] db_search_title: {db_search_title}")
+        
+        # Create the message
+        db_message = Message(
             conversation_id=conversation_id,
-            role="user",
             question=question,
-            ans=assistant_response,
+            ans=ans,  # ans 필드 사용
+            role=message.role or "user",
             q_mode=q_mode,
+            user_name=message.user_name or current_user.username,
             keyword=keyword,
-            db_search_title=db_search_title,
-            model=message.model or "gpt-3.5-turbo",
-            user_name=message.user_name,  # 프론트엔드에서 전달한 user_name만 사용
-            image=message.image_url
+            db_search_title=db_search_title
         )
         
-        print(f"[DEBUG] 생성할 메시지 객체: {single_message}")
-        print(f"[DEBUG] q_mode: {single_message.q_mode}")
-        print(f"[DEBUG] keyword: {single_message.keyword}")
-        print(f"[DEBUG] db_search_title: {single_message.db_search_title}")
-        print(f"[DEBUG] question 길이: {len(question)}")
-        print(f"[DEBUG] answer 길이: {len(assistant_response)}")
+        print(f"[DB_SAVE] 📝 메시지 객체 생성 완료")
         
-        db.add(single_message)
-        
-        # Update conversation last_updated timestamp
-        conversation.last_updated = datetime.utcnow()
-        
-        # 트랜잭션 커밋
+        db.add(db_message)
         db.commit()
+        db.refresh(db_message)
         
-        print(f"[DB_SAVE] ✅ 메시지 저장 성공: ID={single_message.id}")
-        print(f"[DB_SAVE] 저장된 데이터 요약:")
-        print(f"[DB_SAVE]   - 질문: {question[:100]}{'...' if len(question) > 100 else ''}")
-        print(f"[DB_SAVE]   - 답변: {assistant_response[:100]}{'...' if len(assistant_response) > 100 else ''}")
-        print(f"[DB_SAVE]   - 모드: {q_mode}")
-        print(f"[DB_SAVE]   - 키워드: {keyword[:100] if keyword else 'None'}")
-        print(f"[DB_SAVE]   - 문서제목: {db_search_title[:100] if db_search_title else 'None'}")
-        print(f"[DB_SAVE] ====== 메시지 저장 완료 ======")
+        print(f"[DB_SAVE] ✅ 메시지 저장 완료")
+        print(f"[DB_SAVE] 생성된 메시지 ID: {db_message.id}")
         
-        return {"id": single_message.id, "status": "success", "message": "Message saved successfully"}
+        return MessageResponse(
+            userMessage=db_message,
+            assistantMessage=db_message,
+            q_mode=db_message.q_mode,
+            keyword=db_message.keyword,
+            db_search_title=db_message.db_search_title
+        )
         
-    except HTTPException:
-        # HTTP 예외는 그대로 재발생
-        raise
+    except ValidationError as e:
+        print(f"[DB_SAVE] ❌ 데이터 검증 오류: {e}")
+        raise HTTPException(status_code=422, detail=f"데이터 검증 실패: {str(e)}")
+    except IntegrityError as e:
+        print(f"[DB_SAVE] ❌ 데이터베이스 무결성 오류: {e}")
+        db.rollback()
+        raise HTTPException(status_code=400, detail="데이터베이스 제약조건 위반")
     except Exception as e:
-        # 데이터베이스 오류 등 기타 예외 처리
-        print(f"[ERROR] 메시지 저장 중 예외 발생: {str(e)}")
-        db.rollback()  # 트랜잭션 롤백
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") 
+        print(f"[DB_SAVE] ❌ 예상치 못한 오류: {e}")
+        import traceback
+        print(f"[DB_SAVE] 오류 상세: {traceback.format_exc()}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"메시지 저장 실패: {str(e)}") 

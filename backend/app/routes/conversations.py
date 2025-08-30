@@ -124,7 +124,7 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
         # 각 메시지를 user와 assistant로 분리하여 추가
         for message in conversation.messages:
             # User 메시지 추가 (랭그래프 정보 포함)
-            conv_dict["messages"].append({
+            user_message = {
                 "id": message.id,
                 "role": "user",
                 "text": message.question,
@@ -137,11 +137,12 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 "q_mode": message.q_mode,  # 랭그래프 모드 추가
                 "keyword": message.keyword,  # 키워드 추가
                 "db_search_title": message.db_search_title  # 문서 검색 타이틀 추가
-            })
+            }
+            conv_dict["messages"].append(user_message)
             
             # Assistant 메시지 추가 (답변이 있는 경우에만)
             if message.ans:
-                conv_dict["messages"].append({
+                assistant_message = {
                     "id": message.id,  # 실제 데이터베이스 메시지 ID 사용
                     "role": "assistant", 
                     "text": message.ans,
@@ -154,7 +155,13 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                     "q_mode": message.q_mode,  # 랭그래프 모드 추가
                     "keyword": message.keyword,  # 키워드 추가
                     "db_search_title": message.db_search_title  # 문서 검색 타이틀 추가
-                })
+                }
+                conv_dict["messages"].append(assistant_message)
+        
+        # # 디버깅을 위한 로그 추가
+        # print(f"대화 {conversation.id}의 메시지 수: {len(conv_dict['messages'])}")
+        # for i, msg in enumerate(conv_dict['messages']):
+        #     print(f"  메시지 {i+1}: role={msg['role']}, q_mode={msg.get('q_mode')}, question={msg.get('question', '')[:50]}...")
         
         # 요약 정보 추가
         summary_info = get_conversation_summary(conversation, db)
@@ -211,11 +218,26 @@ def create_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Get LLM response
-    try:
-        assistant_response = get_llm_response(message_request.question, message_request.model)
-    except Exception as e:
-        assistant_response = f"Sorry, I encountered an error: {str(e)}"
+    # LLM 응답 생성 (skip_llm 플래그가 true이면 이미 제공된 assistant_response 사용)
+    if message_request.skip_llm and message_request.assistant_response:
+        # 랭그래프에서 이미 생성된 답변 사용 (LLM 재호출 방지)
+        assistant_response = message_request.assistant_response
+        print(f"[MESSAGE] LLM 재호출 건너뛰기 - 이미 제공된 답변 사용: {len(assistant_response)}자")
+    else:
+        # 일반적인 경우 LLM 호출
+        try:
+            assistant_response = get_llm_response(message_request.question, message_request.model)
+        except Exception as e:
+            assistant_response = f"Sorry, I encountered an error: {str(e)}"
+    
+    # 디버깅을 위한 로그 추가
+    print(f"[MESSAGE] 메시지 생성 요청 데이터:")
+    print(f"  - question: {message_request.question}")
+    print(f"  - q_mode: {message_request.q_mode}")
+    print(f"  - keyword: {message_request.keyword}")
+    print(f"  - db_search_title: {message_request.db_search_title}")
+    print(f"  - skip_llm: {message_request.skip_llm}")
+    print(f"  - assistant_response: {message_request.assistant_response[:100] if message_request.assistant_response else 'None'}...")
     
     # Create single message with both question and answer
     message = Message(
@@ -224,8 +246,16 @@ def create_message(
         question=message_request.question,
         ans=assistant_response,
         model=message_request.model,
-        user_name=current_user.loginid or current_user.username  # SSO 로그인 계정 ID 사용
+        user_name=current_user.loginid or current_user.username,  # SSO 로그인 계정 ID 사용
+        q_mode=message_request.q_mode,  # q_mode 추가
+        keyword=message_request.keyword,  # keyword 추가
+        db_search_title=message_request.db_search_title  # db_search_title 추가
     )
+    
+    print(f"[MESSAGE] 생성된 메시지 객체:")
+    print(f"  - q_mode: {message.q_mode}")
+    print(f"  - keyword: {message.keyword}")
+    print(f"  - db_search_title: {message.db_search_title}")
     db.add(message)
     db.commit()
     db.refresh(message)
