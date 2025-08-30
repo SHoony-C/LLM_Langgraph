@@ -34,13 +34,29 @@ async function processOAuthToken(idToken, state) {
           const responseData = JSON.parse(responseText);
           
           if (responseData.success && responseData.user) {
-            // store에 인증 정보 설정
-            store.commit('setAuthToken', responseData.access_token || 'oauth_token');
-            store.commit('setUser', {
-              username: responseData.user.username,
-              email: responseData.user.mail,
-              loginid: responseData.user.loginid,
-              id: responseData.user.userid
+            // 백엔드 JWT 토큰만 사용 (구글 토큰은 절대 사용하지 않음)
+            if (responseData.access_token) {
+              store.commit('setAuth', {
+                token: responseData.access_token,  // 백엔드 JWT 토큰만
+                user: {
+                  username: responseData.user.username,
+                  email: responseData.user.mail,
+                  loginid: responseData.user.loginid,
+                  id: responseData.user.userid
+                }
+              });
+            } else {
+              console.error('[AUTH] 백엔드에서 access_token을 받지 못했습니다.');
+              throw new Error('백엔드 인증 실패');
+            }
+            
+            // localStorage에 JWT 토큰 저장
+            localStorage.setItem('access_token', responseData.access_token);
+            localStorage.setItem('user_info', JSON.stringify(responseData.user));
+            
+            console.log('[AUTH] 백엔드 JWT 토큰 설정 완료 (processOAuthToken):', {
+              token: responseData.access_token.substring(0, 20) + '...',
+              user: responseData.user.username
             });
             
             // 인증 성공 후 홈페이지로 이동
@@ -57,13 +73,15 @@ async function processOAuthToken(idToken, state) {
               try {
                 const userData = JSON.parse(userInfo);
                 
-                // store에 인증 정보 설정
-                store.commit('setAuthToken', accessToken);
-                store.commit('setUser', {
-                  username: userData.username,
-                  email: userData.mail,
-                  loginid: userData.loginid,
-                  id: userData.userid
+                // store에 인증 정보 설정 (통일된 방식)
+                store.commit('setAuth', {
+                  token: accessToken,
+                  user: {
+                    username: userData.username,
+                    email: userData.mail,
+                    loginid: userData.loginid,
+                    id: userData.userid
+                  }
                 });
                 
                 // 인증 성공 후 홈페이지로 이동
@@ -122,13 +140,15 @@ function checkAndProcessOAuthParams() {
       try {
         const userData = JSON.parse(userInfo);
         
-        // store에 인증 정보 설정
-        store.commit('setAuthToken', accessToken);
-        store.commit('setUser', {
-          username: userData.username,
-          email: userData.mail,
-          loginid: userData.loginid,
-          id: userData.userid
+        // store에 인증 정보 설정 (통일된 방식)
+        store.commit('setAuth', {
+          token: accessToken,
+          user: {
+            username: userData.username,
+            email: userData.mail,
+            loginid: userData.loginid,
+            id: userData.userid
+          }
         });
       } catch (error) {
         // 에러 처리
@@ -167,28 +187,40 @@ function initializeAuthFromStorage() {
   
   if (accessToken && userInfo) {
     try {
-      // URL 파라미터 형식으로 파싱 (username=value&mail=value&...)
-      const userData = {};
-      const params = userInfo.split('&');
-      
-      for (const param of params) {
-        if (param.includes('=')) {
-          const [key, value] = param.split('=', 2);
-          userData[key] = decodeURIComponent(value || '');
+      // userInfo가 이미 JSON 객체인지 확인
+      let userData;
+      if (typeof userInfo === 'string') {
+        try {
+          userData = JSON.parse(userInfo);
+        } catch (parseError) {
+          // URL 파라미터 형식으로 파싱 시도 (username=value&mail=value&...)
+          userData = {};
+          const params = userInfo.split('&');
+          
+          for (const param of params) {
+            if (param.includes('=')) {
+              const [key, value] = param.split('=', 2);
+              userData[key] = decodeURIComponent(value || '');
+            }
+          }
         }
+      } else {
+        userData = userInfo; // 이미 객체인 경우
       }
       
       // 필수 필드 확인
       if (userData.username && userData.userid) {
         // store가 초기화된 후에만 호출
         if (typeof store !== 'undefined' && store.commit) {
-          // store에 인증 정보 설정
-          store.commit('setAuthToken', accessToken);
-          store.commit('setUser', {
-            username: userData.username,
-            email: userData.mail || '',
-            loginid: userData.loginid || '',
-            id: userData.userid
+          // store에 인증 정보 설정 (setAuth 사용)
+          store.commit('setAuth', {
+            token: accessToken,
+            user: {
+              username: userData.username,
+              email: userData.mail || '',
+              loginid: userData.loginid || '',
+              id: userData.userid
+            }
           });
           
           // 인증 상태 확인을 위한 API 호출
@@ -366,54 +398,70 @@ const store = createStore({
           const header = JSON.parse(atob(token.split('.')[0]));
           console.log('[AUTH] Token header:', header);
           console.log('[AUTH] Token algorithm:', header.alg);
+          
+          // HS256 알고리즘인지 확인 (백엔드 JWT 토큰만 허용)
+          if (header.alg === 'HS256') {
+            console.log('[AUTH] 백엔드 JWT 토큰 확인됨');
+          } else {
+            console.error('[AUTH] 오류: HS256이 아닌 토큰은 허용되지 않음:', header.alg);
+            console.error('[AUTH] 구글 토큰은 백엔드로만 전송하고, 프론트엔드에서는 절대 사용하지 않아야 함');
+            // 잘못된 토큰은 설정하지 않음
+            return;
+          }
         } catch (e) {
           console.log('[AUTH] Error parsing token header:', e);
         }
       }
       
+      // HS256 토큰만 설정 (구글 토큰 차단)
+      if (token && token.split('.').length === 3) {
+        try {
+          const header = JSON.parse(atob(token.split('.')[0]));
+          if (header.alg !== 'HS256') {
+            console.error('[AUTH] 구글 토큰 차단됨:', header.alg);
+            console.error('[AUTH] 토큰 설정이 차단되었습니다. 백엔드 JWT 토큰만 사용 가능합니다.');
+            return; // 토큰 설정 중단
+          }
+        } catch (e) {
+          console.error('[AUTH] 토큰 헤더 파싱 실패:', e);
+          console.error('[AUTH] 잘못된 토큰 형식입니다.');
+          return; // 토큰 설정 중단
+        }
+      } else if (token && token !== 'oauth_token') {
+        // JWT가 아닌 토큰도 차단 (oauth_token 제외)
+        console.error('[AUTH] JWT 형식이 아닌 토큰 차단됨:', token.substring(0, 20) + '...');
+        return; // 토큰 설정 중단
+      }
+      
       state.token = token;
       state.user = user;
       state.isAuthenticated = true;
-      localStorage.setItem('auth_token', token);
-      localStorage.setItem('user', JSON.stringify(user));
+      
+      // localStorage에 토큰 저장 (API 요청용)
       localStorage.setItem('access_token', token);
       localStorage.setItem('user_info', JSON.stringify(user));
+      
+      // 기존 auth_token과 user도 저장 (호환성 유지)
+      localStorage.setItem('auth_token', token);
+      localStorage.setItem('user', JSON.stringify(user));
       
       // 상태 업데이트 후 강제 반응성 트리거
       state._feedbackUpdateTrigger++;
     },
     setAuthToken(state, token) {
       console.log('[AUTH] setAuthToken called with token:', token ? token.substring(0, 20) + '...' : 'null');
+      console.warn('[AUTH] setAuthToken은 더 이상 사용되지 않습니다. setAuth를 사용하세요.');
       
-      // 토큰 형식 확인 (JWT는 3개의 점으로 구분된 부분으로 구성)
-      if (token && token.split('.').length === 3) {
-        try {
-          const header = JSON.parse(atob(token.split('.')[0]));
-          console.log('[AUTH] Token header:', header);
-          console.log('[AUTH] Token algorithm:', header.alg);
-        } catch (e) {
-          console.log('[AUTH] Error parsing token header:', e);
-        }
-      }
-      
-      state.token = token;
-      state.isAuthenticated = !!token;
-      localStorage.setItem('auth_token', token);
-      localStorage.setItem('access_token', token);
-      
-      // 쿠키에도 토큰 저장 (백엔드와 동기화)
-      if (token) {
-        document.cookie = `auth_token=${token}; path=/; max-age=${30 * 60}; SameSite=Lax`;
-      }
-      
-      // 상태 업데이트 후 강제 반응성 트리거
-      state._feedbackUpdateTrigger++;
+      // setAuth를 통해 토큰 설정 (통일된 방식)
+      // 이 함수는 기존 코드와의 호환성을 위해 유지하되, 실제로는 setAuth를 사용
+      return;
     },
     setUser(state, user) {
       state.user = user;
       localStorage.setItem('user', JSON.stringify(user));
       localStorage.setItem('user_info', JSON.stringify(user));
       
+      // 사용자 정보만 업데이트 (토큰은 setAuth에서 관리)
       // 상태 업데이트 후 강제 반응성 트리거
       state._feedbackUpdateTrigger++;
     },
@@ -1019,13 +1067,11 @@ const store = createStore({
         
         const userData = await userResponse.json();
         
+        // setAuth를 통해 토큰과 사용자 정보 설정 (통일된 방식)
         commit('setAuth', {
           token: token,
           user: userData
         });
-        
-        // localStorage에 JWT 토큰 저장
-        localStorage.setItem('access_token', token);
         
         commit('setConversations', []);
         commit('setCurrentConversation', null);
@@ -1123,18 +1169,40 @@ const requireAuth = (to, from, next) => {
     return;
   }
   
-  // 이미 인증된 경우 바로 통과
+  // 이미 인증된 경우 바로 통과 (store 상태 또는 localStorage 확인)
   if (store.state.isAuthenticated && store.state.token) {
     next();
     return;
   }
   
-  // URL에 OAuth 토큰이 있는 경우 처리 중으로 표시
+  // localStorage에서 토큰 확인 (store 상태와 동기화)
+  const storedToken = localStorage.getItem('access_token');
+  const storedUserInfo = localStorage.getItem('user_info');
+  
+  if (storedToken && storedUserInfo) {
+    try {
+      const userData = JSON.parse(storedUserInfo);
+      // store에 인증 정보 설정
+      store.commit('setAuth', {
+        token: storedToken,
+        user: userData
+      });
+      next();
+      return;
+    } catch (error) {
+      console.error('Stored user info parsing error:', error);
+      // 파싱 실패 시 localStorage 정리
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('user_info');
+    }
+  }
+  
+  // URL에 OAuth 파라미터가 있는 경우 처리 중으로 표시 (구글 토큰은 백엔드로만 전송)
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
   const hash = window.location.hash;
   
-  if (token || (hash && (hash.includes('access_token') || hash.includes('id_token')))) {
+  if (token || (hash && (hash.includes('id_token')))) {
     isProcessingOAuth = true;
     next();
     return;
@@ -1337,12 +1405,19 @@ const router = createRouter({
           const backendUser = data.user || user;
           
           // 토큰과 사용자 정보를 localStorage에 저장
+          // 백엔드 JWT 토큰만 사용하도록 설정
+          store.commit('setAuth', {
+            token: data.access_token,  // 백엔드 JWT 토큰
+            user: backendUser
+          });
+          
+          // localStorage에 JWT 토큰 저장 (API 요청용)
           localStorage.setItem('access_token', data.access_token);
           localStorage.setItem('user_info', JSON.stringify(backendUser));
           
-          store.commit('setAuth', {
-            token: data.access_token,
-            user: backendUser
+          console.log('[AUTH] 백엔드 JWT 토큰 설정 완료:', {
+            token: data.access_token.substring(0, 20) + '...',
+            user: backendUser.username
           });
         })
                       .catch((error) => {
@@ -1409,113 +1484,22 @@ const checkForAuthToken = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
   
-  // 2. URL 해시에서 토큰 확인 (Google OAuth)
-  let hashToken = null;
-  let idToken = null;
-  
+  // 2. URL 해시에서 Google OAuth 파라미터 확인 (백엔드로만 전송, 프론트엔드에서는 사용하지 않음)
   if (window.location.hash) {
     // URL 해시 파싱
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    hashToken = hashParams.get('access_token');
-    idToken = hashParams.get('id_token');
+    const idToken = hashParams.get('id_token');
+    const state = hashParams.get('state');
     
-    if (hashToken && idToken) {
+    if (idToken && state) {
       // 해시 제거
       const url = new URL(window.location);
       url.hash = '';
       window.history.replaceState({}, document.title, url);
       
-      // id_token 디코딩 (JWT)
-      try {
-        // Base64 URL 디코딩
-        const base64Url = idToken.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
-        
-        const payload = JSON.parse(jsonPayload);
-        
-        // 사용자 정보 설정
-        const user = {
-          username: payload.name || "User",
-          mail: payload.email || "",
-          loginid: payload.sub,
-          id: payload.sub // 백엔드 ID 대신 sub 사용
-        };
-        
-        // 백엔드에서 인증 토큰 발급 받기
-        fetch('http://localhost:8001/api/auth/token', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            username: user.username,
-            id_token: idToken,
-            access_token: hashToken,
-            is_sso: true
-          })
-        })
-        .then(response => {
-          if (!response.ok) {
-            return response.json().then(errorData => {
-              console.warn("Backend authentication failed:", errorData);
-              throw new Error(errorData.detail || 'Backend authentication failed');
-            });
-          }
-          return response.json();
-        })
-        .then(data => {
-          // 백엔드에서 제공하는 토큰과 사용자 정보로 인증 설정
-          const backendUser = data.user || user;
-          store.commit('setAuth', {
-            token: data.access_token,
-            user: backendUser
-          });
-        })
-        .catch((error) => {
-          console.error('Backend authentication failed:', error);
-          // 백엔드 인증 실패 시 사용자에게 알림
-          alert('백엔드 인증에 실패했습니다. 다시 시도해주세요.');
-          // 인증 실패 시 SSO 페이지로 리다이렉트
-          window.location.replace('http://localhost:8001/api/auth/auth_sh');
-        })
-        .finally(() => {
-          // 대화 초기화 시도
-          store.commit('setConversations', []);
-          store.commit('setCurrentConversation', null);
-          store.dispatch('fetchConversations')
-            .catch(error => {
-              console.error('대화 가져오기 실패:', error);
-            })
-            .finally(() => {
-              // OAuth 처리 완료 후 인증 상태 확인
-              isProcessingOAuth = false; // OAuth 처리 완료
-              hasProcessedOAuth = true; // OAuth 처리 완료 플래그 설정
-              
-              // 인증 상태가 제대로 설정되었는지 확인
-              if (store.state.isAuthenticated && localStorage.getItem('access_token')) {
-                router.push('/');
-              } else {
-                try {
-                  window.location.replace('http://localhost:8001/api/auth/auth_sh');
-                } catch (error) {
-                  try {
-                    window.location = 'http://localhost:8001/api/auth/auth_sh';
-                  } catch (error2) {
-                    alert('checkForAuthToken 리다이렉트에 실패했습니다. 수동으로 로그인해주세요.');
-                  }
-                }
-              }
-            });
-        });
-        
-        return; // 함수 종료
-      } catch (error) {
-        console.error("ID 토큰 처리 오류:", error);
-        isProcessingOAuth = false; // 오류 시에도 플래그 초기화
-      }
+      // 백엔드로 Google OAuth 파라미터 전송 (프론트엔드에서는 구글 토큰을 절대 사용하지 않음)
+      processOAuthToken(idToken, state);
+      return; // 함수 종료
     }
   }
   

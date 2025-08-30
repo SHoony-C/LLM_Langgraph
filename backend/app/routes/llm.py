@@ -4,7 +4,7 @@ import json
 import base64
 import random
 import requests
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, AsyncGenerator
@@ -26,6 +26,7 @@ from app.utils.config import (
 from app.database import get_db
 from app.models import Conversation, Message
 from sqlalchemy.orm import Session
+
 from datetime import datetime
 
 # Create router 
@@ -217,15 +218,8 @@ AVAILABLE_MODELS = [
     {"name": "Llama 4 Maverick", "value": "llama-4-maverick"}
 ]
 
-# Check OpenAI package version
-try:
-    # For newer OpenAI SDK versions (>1.0)
-    from openai import OpenAI
-    from openai.types.chat import ChatCompletionChunk
-    USING_NEW_SDK = True
-except ImportError:
-    # For older OpenAI SDK versions (<1.0)
-    USING_NEW_SDK = False
+# 구버전 OpenAI SDK 강제 사용
+USING_NEW_SDK = False
 
 # Model for API key update
 class ApiKeyUpdate(BaseModel):
@@ -319,31 +313,18 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
         
         try:
             # LLM을 사용하여 키워드 증강
-            if USING_NEW_SDK:
-                from openai import OpenAI
-                client = OpenAI(api_key=OPENAI_API_KEY)
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "당신은 전문적인 키워드 분석가입니다. 주어진 질문을 분석하여 관련된 전문 키워드들을 생성해주세요. 각 키워드는 쉼표로 구분하고, 최대 15개까지 생성하세요."},
-                        {"role": "user", "content": f"다음 질문에 대한 관련 키워드들을 생성해주세요: {question}"}
-                    ],
-                    max_tokens=200,
-                    temperature=0.7
-                )
-                llm_response = response.choices[0].message.content
-            else:
-                openai.api_key = OPENAI_API_KEY
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "당신은 전문적인 키워드 분석가입니다. 주어진 질문을 분석하여 관련된 전문 키워드들을 생성해주세요. 각 키워드는 쉼표로 구분하고, 최대 15개까지 생성하세요."},
-                        {"role": "user", "content": f"다음 질문에 대한 관련 키워드들을 생성해주세요: {question}"}
-                    ],
-                    max_tokens=200,
-                    temperature=0.7
-                )
-                llm_response = response.choices[0].message.content
+            # 구버전 OpenAI 라이브러리 사용
+            openai.api_key = OPENAI_API_KEY
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "당신은 전문적인 키워드 분석가입니다. 주어진 질문을 분석하여 관련된 전문 키워드들을 생성해주세요. 각 키워드는 쉼표로 구분하고, 최대 15개까지 생성하세요."},
+                    {"role": "user", "content": f"다음 질문에 대한 관련 키워드들을 생성해주세요: {question}"}
+                ],
+                max_tokens=200,
+                temperature=0.7
+            )
+            llm_response = response.choices[0].message.content
             
             # LLM 응답을 키워드 리스트로 변환
             keywords_text = llm_response.strip()
@@ -524,28 +505,113 @@ async def node_rc_rerank(state: SearchState) -> SearchState:
         raise RuntimeError(f"[error]: node_rc_rerank: {str(e)}")
 
 async def node_rc_answer(state: SearchState) -> SearchState:
-    """답변 생성 노드"""
-    print("[inform]: node_rc_answer")
+    """답변 생성 노드 (랭그래프 전용)"""
+    print("[inform]: node_rc_answer 실행")
+    
     try:
         cnt_result = 5
         candidates_top = state['response'][:cnt_result]
         
         # 검색 결과가 있는 경우
         if candidates_top:
-            # 상위 1건에 대해 LLM API 호출하여 상세 분석
+            print(f"[Answer] ✅ 검색 결과가 있습니다. LLM API 호출을 시작합니다.")
+            
+            # 상위 1건의 문서 정보 추출
             top_result = candidates_top[0]
-            detailed_analysis = await generate_detailed_analysis(state['question'], top_result)
+            top_payload = top_result.get('res_payload', {})
+            
+            # 문서 제목과 내용 추출
+            document_title = top_payload.get('ppt_title', '제목 없음')
+            document_content = top_payload.get('ppt_content', top_payload.get('ppt_summary', '내용 없음'))
+            
+            print(f"[Answer] 📄 RAG 문서 정보:")
+            print(f"[Answer] 제목: {document_title}")
+            print(f"[Answer] 내용 길이: {len(document_content)} 문자")
+            print(f"[Answer] 내용 미리보기: {document_content[:200]}...")
+            
+            # LLM에 전송할 프롬프트 구성
+            prompt = f"""
+다음 문서를 참고하여 질문에 답변해주세요.
+
+[참고 문서]
+문서 제목: {document_title}
+문서 내용: {document_content[:1000]}...
+
+[질문]
+{state['question']}
+
+위 문서를 바탕으로 질문에 대한 답변을 작성해주세요. 
+답변은 다음과 같이 작성해주세요:
+- 한국어로 구어체로 작성
+- 형식적인 표현보다는 자연스럽고 이해하기 쉽게 설명
+- 문서 내용을 바탕으로 구체적이고 유용한 답변 제공
+- 답변만 작성하고 추가적인 헤더나 형식은 포함하지 마세요
+            """.strip()
+            
+            print(f"[Answer] 📝 LLM에 전송할 프롬프트:")
+            print(f"[Answer] {prompt}")
+            print(f"[Answer] 📊 프롬프트 길이: {len(prompt)} 문자")
+            
+            # OpenAI API 호출하여 답변 생성
+            llm_answer = ""
+            try:
+                if OPENAI_API_KEY:
+                    print(f"[Answer] 🚀 OpenAI API 호출 시작...")
+                    openai.api_key = OPENAI_API_KEY
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=1000,
+                        temperature=0.7
+                    )
+                    raw_llm_answer = response['choices'][0]['message']['content']
+                    print(f"[Answer] ✅ OpenAI 응답 생성 완료")
+                    print(f"[Answer] 📥 OpenAI 원시 응답:")
+                    print(f"[Answer] {raw_llm_answer}")
+                    print(f"[Answer] 📊 응답 길이: {len(raw_llm_answer)} 문자")
+                    print(f"[Answer] 사용된 토큰: {response['usage']['total_tokens'] if response.get('usage') else 'N/A'}")
+                    
+                    # LLM에서 받은 깔끔한 답변을 바로 사용
+                    llm_answer = raw_llm_answer.strip()
+                else:
+                    print(f"[Answer] ⚠️ OpenAI API 키가 설정되지 않음")
+                    llm_answer = f"""입력하신 '{state['question']}'에 대한 답변입니다.
+
+참고 문서: {document_title}
+
+문서 내용을 바탕으로 분석한 결과, {document_content[:200]}...에 대한 정보를 찾았습니다.
+
+더 자세한 분석을 위해서는 OpenAI API 키가 필요합니다."""
+                    
+            except Exception as e:
+                print(f"[Answer] ❌ OpenAI API 호출 실패: {e}")
+                import traceback
+                print(f"[Answer] 오류 상세: {traceback.format_exc()}")
+                # API 호출 실패 시 기본 답변 생성
+                llm_answer = f"""입력하신 '{state['question']}'에 대한 답변입니다.
+
+참고 문서: {document_title}
+
+문서 내용을 바탕으로 분석한 결과, {document_content[:200]}...에 대한 정보를 찾았습니다.
+
+API 호출 중 오류가 발생했습니다: {str(e)}"""
+            
+            print(f"[Answer] 🎯 최종 생성된 답변:")
+            print(f"[Answer] {llm_answer}")
             
             # LangGraph 실행 결과를 위한 완전한 응답 구조
             response = {
                 "res_id": [rest['res_id'] for rest in candidates_top],
-                "answer": detailed_analysis,
-                "q_mode": "search",  # 최초 질문은 항상 search 모드
+                "answer": llm_answer,  # LLM으로 생성된 실제 답변
+                "q_mode": "search",  # 랭그래프는 항상 search 모드
                 "keyword": state["keyword"],  # 키워드 증강 목록
                 "db_search_title": [item.get('res_payload', {}).get('ppt_title', '제목 없음') for item in candidates_top],  # 검색된 문서 제목들
                 "top_document": top_result
             }
         else:
+            print(f"[Answer] ⚠️ 검색 결과가 없습니다. 기본 답변을 생성합니다.")
             response = {
                 "res_id": [],
                 "answer": f"입력하신 '{state['question']}'에 대한 관련 문서를 찾을 수 없습니다.",
@@ -554,10 +620,15 @@ async def node_rc_answer(state: SearchState) -> SearchState:
                 "db_search_title": []
             }
         
+        print(f"[Answer] 📤 최종 응답 구조:")
+        print(f"[Answer] {response}")
+        
         # LangGraph 실행 결과를 DB에 직접 저장
         await save_langgraph_result_to_db(state['question'], response, state["keyword"], state["candidates_total"])
         
         await publish_node_status("node_rc_answer", "completed", {"result": response})
+        
+        print(f"[Answer] ✅ node_rc_answer 함수 완료")
         
         return {
             "question": state['question'],
@@ -565,13 +636,16 @@ async def node_rc_answer(state: SearchState) -> SearchState:
             "candidates_total": state["candidates_total"],
             "response": response
         }
+        
     except Exception as e:
         print("[error]: node_rc_answer")
+        import traceback
+        print(f"[error] 상세 오류: {traceback.format_exc()}")
         raise RuntimeError(f"[error]: node_rc_answer: {str(e)}")
 
 async def node_rc_plain_answer(state: SearchState) -> SearchState:
-    """기본 답변 노드"""
-    print("[inform]: node_rc_plain_answer")
+    """기본 답변 노드 (랭그래프 전용)"""
+    print("[inform]: node_rc_plain_answer 실행")
     
     # 검색 결과가 없는 경우 더 구체적인 안내 메시지 생성
     question = state['question']
@@ -628,7 +702,7 @@ async def node_rc_plain_answer(state: SearchState) -> SearchState:
             "answer": detailed_answer,
             "q_mode": "search",  # 최초 질문은 항상 search 모드
             "keyword": state["keyword"],  # 키워드 증강 목록
-            "db_search_title": []  # 검색 결과가 없는 경우
+            "db_search_title": []
         }
     }
 
@@ -638,9 +712,9 @@ def judge_rc_ragscore(state: SearchState) -> str:
     return "Y" if any(candidate.get("res_score", 0) >= 0.5 for candidate in candidates_total) else "N"
 
 async def save_langgraph_result_to_db(question: str, response: dict, keywords: list, candidates_total: list):
-    """LangGraph 실행 결과를 DB에 직접 저장"""
+    """LangGraph 실행 결과를 DB에 직접 저장 (랭그래프 전용)"""
     try:
-        print(f"[DB_SAVE] LangGraph 결과 DB 저장 시작")
+        print(f"[DB_SAVE] LangGraph 결과 DB 저장 시작 (랭그래프 전용)")
         print(f"[DB_SAVE] 질문: {question}")
         print(f"[DB_SAVE] 응답: {response.get('answer', '')[:100]}...")
         print(f"[DB_SAVE] 키워드: {keywords}")
@@ -658,13 +732,13 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
         db.commit()
         db.refresh(conversation)
         
-        # 메시지 저장
+        # 메시지 저장 (q_mode: 'search' - 랭그래프 전용)
         message = Message(
             conversation_id=conversation.id,
             role="user",
             question=question,
             ans=response.get('answer', ''),
-            q_mode=response.get('q_mode', 'search'),
+            q_mode='search',  # 랭그래프 전용 모드
             keyword=str(keywords) if keywords else None,
             db_search_title=str([item.get('res_payload', {}).get('ppt_title', '') for item in candidates_total[:5]]) if candidates_total else None,
             model="gpt-3.5-turbo"
@@ -674,9 +748,10 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
         db.add(message)
         db.commit()
         
-        print(f"[DB_SAVE] ✅ LangGraph 결과 DB 저장 완료")
+        print(f"[DB_SAVE] ✅ LangGraph 결과 DB 저장 완료 (랭그래프 전용)")
         print(f"[DB_SAVE] 대화 ID: {conversation.id}")
         print(f"[DB_SAVE] 메시지 ID: {message.id}")
+        print(f"[DB_SAVE] q_mode: {message.q_mode} (랭그래프 전용)")
         
     except Exception as e:
         print(f"[DB_SAVE] ❌ LangGraph 결과 DB 저장 실패: {str(e)}")
@@ -1103,14 +1178,80 @@ async def stream_response(request: StreamRequest):
         print(f"Error in LangGraph streaming: {str(e)}")
         return Response(content=f"Error: {str(e)}", media_type="text/plain")
 
-# LangGraph 직접 실행 엔드포인트
-@router.post("/langgraph")
-async def execute_langgraph(request: StreamRequest):
-    """LangGraph를 직접 실행하여 결과 반환"""
+# 일반 LLM 채팅 엔드포인트 (첫 번째 이후 질문용)
+@router.post("/chat")
+async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
+    """일반 LLM을 사용한 채팅 응답 (랭그래프 없이)"""
     try:
         # OpenAI API 키 확인
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
+        
+        print(f"[Chat] 일반 LLM 채팅 시작: {request.question}")
+        print(f"[Chat] 대화 ID: {request.conversation_id}")
+        
+        # 대화 히스토리 구성
+        messages = [{"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."}]
+        
+        if request.conversation_id:
+            try:
+                # 해당 대화의 이전 메시지들 가져오기 (최근 10개만)
+                conversation_messages = db.query(Message).filter(
+                    Message.conversation_id == request.conversation_id
+                ).order_by(Message.created_at.asc()).limit(10).all()
+                
+                print(f"[Chat] 이전 대화 메시지 {len(conversation_messages)}개 로드")
+                
+                # 이전 대화를 messages에 추가
+                for msg in conversation_messages:
+                    if msg.question:
+                        messages.append({"role": "user", "content": msg.question})
+                    if msg.ans:
+                        messages.append({"role": "assistant", "content": msg.ans})
+                        
+            except Exception as e:
+                print(f"[Chat] 대화 히스토리 로드 실패: {e}")
+                # 히스토리 로드 실패해도 계속 진행
+        
+        # 현재 질문 추가
+        messages.append({"role": "user", "content": request.question})
+        
+        print(f"[Chat] 전송할 메시지 개수: {len(messages)}")
+        print(f"[Chat] 마지막 메시지: {messages[-1]}")
+        
+        # OpenAI API 호출 (구버전 사용)
+        openai.api_key = OPENAI_API_KEY
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.7
+        )
+        answer = response.choices[0].message.content
+        print(f"[Chat] ✅ 구버전 OpenAI 응답 생성 완료")
+        
+        return {
+            "status": "success",
+            "response": answer,
+            "message": "일반 LLM 채팅 완료"
+        }
+        
+    except Exception as e:
+        print(f"[Chat] 일반 LLM 채팅 오류: {str(e)}")
+        import traceback
+        print(f"[Chat] 오류 상세: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"일반 LLM 채팅 오류: {str(e)}")
+
+# LangGraph 직접 실행 엔드포인트
+@router.post("/langgraph")
+async def execute_langgraph(request: StreamRequest):
+    """LangGraph를 직접 실행하여 결과 반환 (랭그래프 전용 API)"""
+    try:
+        # OpenAI API 키 확인
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
+        
+        print(f"[LangGraph] 🚀 랭그래프 실행 시작: {request.question}")
         
         # 워크플로우 확인
         if langgraph_instance is None:

@@ -43,7 +43,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     # 알고리즘을 명시적으로 설정
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    print(f"[AUTH] JWT 토큰 생성 완료 - 알고리즘: {ALGORITHM}, 만료: {expire}")
     return encoded_jwt
 
 async def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -62,19 +61,19 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
         print("No token found in headers or cookies")
         raise credentials_exception
     
-    print(f"Token source: {'header' if token == Depends(oauth2_scheme) else 'cookie'}")
-    print(f"Request headers: {dict(request.headers)}")
-    print(f"Request cookies: {dict(request.cookies)}")
+    # print(f"Token source: {'header' if token == Depends(oauth2_scheme) else 'cookie'}")
+    # print(f"Request headers: {dict(request.headers)}")
+    # print(f"Request cookies: {dict(request.cookies)}")
     
     try:
-        print(f"Validating token: {token[:20]}...")  # 토큰 앞부분만 로깅
-        print(f"Using algorithm: {ALGORITHM}")
-        print(f"Using secret key: {SECRET_KEY[:10]}...")
+        # print(f"Validating token: {token[:20]}...")  # 토큰 앞부분만 로깅
+        # print(f"Using algorithm: {ALGORITHM}")
+        # print(f"Using secret key: {SECRET_KEY[:10]}...")
         
         # 토큰 헤더 확인 (알고리즘 검증)
         try:
             header = jwt.get_unverified_header(token)
-            print(f"Token header: {header}")
+            # print(f"Token header: {header}")
             if header.get('alg') != ALGORITHM:
                 print(f"Token algorithm mismatch: expected {ALGORITHM}, got {header.get('alg')}")
                 raise credentials_exception
@@ -87,7 +86,7 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
         if username is None:
             print(f"Token validation failed: no username in payload")
             raise credentials_exception
-        print(f"Token validation successful for user: {username}")
+        # print(f"Token validation successful for user: {username}")
         token_data = TokenData(username=username)
     except JWTError as e:
         print(f"JWT decode error: {str(e)}")
