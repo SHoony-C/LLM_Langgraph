@@ -45,8 +45,6 @@ class Message(Base):
     db_search_title = Column(Text, nullable=True)  # 랭체인에서 찾은 문서 타이틀 저장
     feedback = Column(Enum("positive", "negative", name="feedback_enum"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    image = Column(String(500), nullable=True)
-    model = Column(String(50), nullable=True)
     
     # Define relationship with Conversation
     conversation = relationship("Conversation", back_populates="messages") 

@@ -237,7 +237,6 @@ class Model(BaseModel):
 # 스트리밍 요청을 위한 클래스
 class StreamRequest(BaseModel):
     question: str
-    model: str = "gpt-3.5-turbo"
     conversation_id: Optional[int] = None
     generate_image: Optional[bool] = False  # 이미지 생성 플래그 추가
 
@@ -623,8 +622,8 @@ API 호출 중 오류가 발생했습니다: {str(e)}"""
         print(f"[Answer] 📤 최종 응답 구조:")
         print(f"[Answer] {response}")
         
-        # LangGraph 실행 결과를 DB에 직접 저장
-        await save_langgraph_result_to_db(state['question'], response, state["keyword"], state["candidates_total"])
+        # LangGraph 실행 결과는 프론트엔드에서 저장하도록 변경 (중복 저장 방지)
+        # await save_langgraph_result_to_db(state['question'], response, state["keyword"], state["candidates_total"])
         
         await publish_node_status("node_rc_answer", "completed", {"result": response})
         
@@ -688,8 +687,8 @@ async def node_rc_plain_answer(state: SearchState) -> SearchState:
         "db_search_title": []  # 검색 결과가 없는 경우
     }
     
-    # LangGraph 실행 결과를 DB에 직접 저장
-    await save_langgraph_result_to_db(state['question'], complete_result, state["keyword"], state["candidates_total"])
+    # LangGraph 실행 결과는 프론트엔드에서 저장하도록 변경 (중복 저장 방지)
+    # await save_langgraph_result_to_db(state['question'], complete_result, state["keyword"], state["candidates_total"])
     
     await publish_node_status("node_rc_plain_answer", "completed", {"result": complete_result})
     
@@ -740,8 +739,7 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
             ans=response.get('answer', ''),
             q_mode='search',  # 랭그래프 전용 모드
             keyword=str(keywords) if keywords else None,
-            db_search_title=str([item.get('res_payload', {}).get('ppt_title', '') for item in candidates_total[:5]]) if candidates_total else None,
-            model="gpt-3.5-turbo"
+            db_search_title=str([item.get('res_payload', {}).get('ppt_title', '') for item in candidates_total[:5]]) if candidates_total else None
             # user_name 필드 제거 - 하드코딩 방지
         )
         
@@ -1037,8 +1035,10 @@ def set_custom_api_key(key_data: CustomApiKeyUpdate):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error setting custom API key: {str(e)}")
 
-def get_llm_response(prompt: str, model: str = "gpt-3.5-turbo") -> str:
+def get_llm_response(prompt: str) -> str:
     """Get a response from the selected LLM model"""
+    model = "gpt-3.5-turbo"  # 기본 모델 설정
+    
     # Check if API key is set
     if model.startswith("gpt") and not OPENAI_API_KEY:
         return "Error: OpenAI API key not set. Please set your API key in the settings."
@@ -1178,7 +1178,148 @@ async def stream_response(request: StreamRequest):
         print(f"Error in LangGraph streaming: {str(e)}")
         return Response(content=f"Error: {str(e)}", media_type="text/plain")
 
-# 일반 LLM 채팅 엔드포인트 (첫 번째 이후 질문용)
+# 일반 LLM 채팅 엔드포인트 (streaming 지원)
+@router.post("/chat/stream")
+async def stream_chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
+    """Stream a response from general LLM chat (without LangGraph)"""
+    try:
+        # OpenAI API 키 확인
+        if not OPENAI_API_KEY:
+            return Response(content="Error: OpenAI API 키가 설정되지 않았습니다.", media_type="text/plain")
+        
+        print(f"[Chat Stream] ========== 일반 LLM 스트리밍 채팅 시작 ==========")
+        print(f"[Chat Stream] 요청 정보:")
+        print(f"[Chat Stream] - 질문: {request.question}")
+        print(f"[Chat Stream] - 대화 ID: {request.conversation_id}")
+        print(f"[Chat Stream] - conversation_id 타입: {type(request.conversation_id)}")
+        print(f"[Chat Stream] - conversation_id가 None인가?: {request.conversation_id is None}")
+        
+        # 대화 히스토리 구성
+        messages = [{"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."}]
+        
+        if request.conversation_id:
+            try:
+                # 해당 대화의 이전 메시지들 가져오기 (최근 10개만)
+                conversation_messages = db.query(Message).filter(
+                    Message.conversation_id == request.conversation_id
+                ).order_by(Message.created_at.asc()).limit(10).all()
+                
+                print(f"[Chat Stream] 이전 대화 메시지 {len(conversation_messages)}개 로드")
+                print(f"[Chat Stream] ========== 이전 대화 히스토리 상세 정보 ==========")
+                
+                # 이전 대화를 messages에 추가
+                for i, msg in enumerate(conversation_messages):
+                    print(f"[Chat Stream] DB 메시지 {i+1}: ID={msg.id}, role={msg.role}, created_at={msg.created_at}")
+                    if msg.question:
+                        print(f"[Chat Stream] 질문: {msg.question}")
+                        messages.append({"role": "user", "content": msg.question})
+                    if msg.ans:
+                        print(f"[Chat Stream] 답변: {msg.ans}")
+                        messages.append({"role": "assistant", "content": msg.ans})
+                    print(f"[Chat Stream] ----------------------------------------")
+                
+                print(f"[Chat Stream] ========== 이전 대화 히스토리 로드 완료 ==========")
+                        
+            except Exception as e:
+                print(f"[Chat Stream] 대화 히스토리 로드 실패: {e}")
+                # 히스토리 로드 실패해도 계속 진행
+        
+        # 현재 질문 추가
+        messages.append({"role": "user", "content": request.question})
+        
+        print(f"[Chat Stream] 전송할 메시지 개수: {len(messages)}")
+        print(f"[Chat Stream] ========== OpenAI API에 전송할 전체 메시지 내용 ==========")
+        print(f"[Chat Stream] ==========전체 메시지 내용 : ")
+        print(f"{messages}")
+        
+        print(f"[Chat Stream] ========== 전체 메시지 내용 끝 ==========")
+        
+        # 스트리밍 응답 생성
+        async def stream_generator():
+            try:
+                print(f"[Chat Stream] OpenAI API 스트림 생성 시작...")
+                # Old SDK style (<1.0) 강제 사용
+                openai.api_key = OPENAI_API_KEY
+                stream = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.7,
+                    stream=True
+                )
+                print(f"[Chat Stream] OpenAI API 스트림 생성 완료, 스트리밍 시작...")
+                
+                chunk_count = 0
+                for chunk in stream:
+                    chunk_count += 1
+                    # print(f"[Chat Stream] 청크 {chunk_count} 수신: {chunk}")
+                    if chunk['choices'][0].get('delta', {}).get('content'):
+                        content = chunk['choices'][0]['delta']['content']
+                        # print(f"[Chat Stream] 청크 {chunk_count} 내용: '{content}'")
+                        yield f"data: {content}\n\n"
+                    await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
+                
+                # print(f"[Chat Stream] 스트리밍 완료, 총 {chunk_count}개 청크 처리")
+                yield "data: [DONE]\n\n"
+                
+            except Exception as e:
+                print(f"[Chat Stream] 스트리밍 중 오류: {str(e)}")
+                import traceback
+                print(f"[Chat Stream] 오류 상세: {traceback.format_exc()}")
+                yield f"data: Error: {str(e)}\n\n"
+                yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            }
+        )
+        
+    except Exception as e:
+        print(f"[Chat Stream] 일반 LLM 스트리밍 채팅 오류: {str(e)}")
+        import traceback
+        print(f"[Chat Stream] 오류 상세: {traceback.format_exc()}")
+        return Response(content=f"Error: {str(e)}", media_type="text/plain")
+
+# 스트리밍 테스트 엔드포인트
+@router.get("/chat/stream/test")
+async def test_streaming():
+    """스트리밍 기능 테스트"""
+    async def test_stream_generator():
+        try:
+            print("[Test Stream] 테스트 스트리밍 시작")
+            for i in range(5):
+                message = f"테스트 메시지 {i+1}"
+                print(f"[Test Stream] 전송: {message}")
+                yield f"data: {message}\n\n"
+                await asyncio.sleep(1)  # 1초 간격으로 전송
+            
+            print("[Test Stream] 테스트 스트리밍 완료")
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            print(f"[Test Stream] 오류: {str(e)}")
+            yield f"data: Error: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(
+        test_stream_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        }
+    )
+
+# 기존 비-스트리밍 채팅 엔드포인트 (하위 호환성을 위해 유지)
 @router.post("/chat")
 async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
     """일반 LLM을 사용한 채팅 응답 (랭그래프 없이)"""
@@ -1187,8 +1328,12 @@ async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
         
-        print(f"[Chat] 일반 LLM 채팅 시작: {request.question}")
-        print(f"[Chat] 대화 ID: {request.conversation_id}")
+        print(f"[Chat] ========== 일반 LLM 채팅 시작 (비-스트리밍) ==========")
+        print(f"[Chat] 요청 정보:")
+        print(f"[Chat] - 질문: {request.question}")
+        print(f"[Chat] - 대화 ID: {request.conversation_id}")
+        print(f"[Chat] - conversation_id 타입: {type(request.conversation_id)}")
+        print(f"[Chat] - conversation_id가 None인가?: {request.conversation_id is None}")
         
         # 대화 히스토리 구성
         messages = [{"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."}]
@@ -1201,13 +1346,20 @@ async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
                 ).order_by(Message.created_at.asc()).limit(10).all()
                 
                 print(f"[Chat] 이전 대화 메시지 {len(conversation_messages)}개 로드")
+                print(f"[Chat] ========== 이전 대화 히스토리 상세 정보 ==========")
                 
                 # 이전 대화를 messages에 추가
-                for msg in conversation_messages:
+                for i, msg in enumerate(conversation_messages):
+                    print(f"[Chat] DB 메시지 {i+1}: ID={msg.id}, role={msg.role}, created_at={msg.created_at}")
                     if msg.question:
+                        print(f"[Chat] 질문: {msg.question}")
                         messages.append({"role": "user", "content": msg.question})
                     if msg.ans:
+                        print(f"[Chat] 답변: {msg.ans}")
                         messages.append({"role": "assistant", "content": msg.ans})
+                    print(f"[Chat] ----------------------------------------")
+                
+                print(f"[Chat] ========== 이전 대화 히스토리 로드 완료 ==========")
                         
             except Exception as e:
                 print(f"[Chat] 대화 히스토리 로드 실패: {e}")
@@ -1217,7 +1369,12 @@ async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
         messages.append({"role": "user", "content": request.question})
         
         print(f"[Chat] 전송할 메시지 개수: {len(messages)}")
-        print(f"[Chat] 마지막 메시지: {messages[-1]}")
+        print(f"[Chat] ========== OpenAI API에 전송할 전체 메시지 내용 ==========")
+        for i, msg in enumerate(messages):
+            print(f"[Chat] 메시지 {i+1}/{len(messages)}: role={msg['role']}")
+            print(f"[Chat] 내용: {msg['content']}")
+            print(f"[Chat] ----------------------------------------")
+        print(f"[Chat] ========== 전체 메시지 내용 끝 ==========")
         
         # OpenAI API 호출 (구버전 사용)
         openai.api_key = OPENAI_API_KEY

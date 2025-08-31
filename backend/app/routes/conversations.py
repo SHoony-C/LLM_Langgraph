@@ -129,9 +129,7 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 "role": "user",
                 "text": message.question,
                 "question": message.question,
-                "model": message.model,
                 "feedback": message.feedback,
-                "image": message.image,
                 "created_at": message.created_at,
                 "user_name": message.user_name,
                 "q_mode": message.q_mode,  # 랭그래프 모드 추가
@@ -148,9 +146,7 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                     "text": message.ans,
                     "ans": message.ans,
                     "question": message.question,
-                    "model": message.model,
                     "feedback": message.feedback,
-                    "image": message.image,
                     "created_at": message.created_at,
                     "q_mode": message.q_mode,  # 랭그래프 모드 추가
                     "keyword": message.keyword,  # 키워드 추가
@@ -226,7 +222,7 @@ def create_message(
     else:
         # 일반적인 경우 LLM 호출
         try:
-            assistant_response = get_llm_response(message_request.question, message_request.model)
+            assistant_response = get_llm_response(message_request.question)
         except Exception as e:
             assistant_response = f"Sorry, I encountered an error: {str(e)}"
     
@@ -239,26 +235,49 @@ def create_message(
     print(f"  - skip_llm: {message_request.skip_llm}")
     print(f"  - assistant_response: {message_request.assistant_response[:100] if message_request.assistant_response else 'None'}...")
     
+    # user_name 검증 및 설정
+    user_name = current_user.loginid or current_user.username
+    if not user_name:
+        print(f"[ERROR] user_name이 없음. current_user: {current_user}")
+        raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")
+    
+    print(f"[MESSAGE] 사용자명 설정: {user_name}")
+    
+    # 중복 저장 방지 - 동일한 질문과 사용자의 최근 메시지 확인 (30초 이내)
+    from datetime import datetime, timedelta
+    recent_time = datetime.utcnow() - timedelta(seconds=30)
+    
+    existing_message = db.query(Message).filter(
+        Message.conversation_id == conversation_id,
+        Message.question == message_request.question,
+        Message.user_name == user_name,
+        Message.created_at >= recent_time
+    ).first()
+    
+    if existing_message:
+        print(f"[WARNING] 중복 메시지 감지됨. 기존 메시지 ID: {existing_message.id}")
+        return MessageResponse(
+            userMessage=existing_message,
+            assistantMessage=existing_message
+        )
+    
     # Create single message with both question and answer
     message = Message(
         conversation_id=conversation_id,
         role="user",
         question=message_request.question,
         ans=assistant_response,
-        model=message_request.model,
-        user_name=current_user.loginid or current_user.username,  # SSO 로그인 계정 ID 사용
+        user_name=user_name,  # 검증된 사용자명 사용
         q_mode=message_request.q_mode,  # q_mode 추가
         keyword=message_request.keyword,  # keyword 추가
         db_search_title=message_request.db_search_title  # db_search_title 추가
     )
     
-    print(f"[MESSAGE] 생성된 메시지 객체:")
-    print(f"  - q_mode: {message.q_mode}")
-    print(f"  - keyword: {message.keyword}")
-    print(f"  - db_search_title: {message.db_search_title}")
+    print(f"[MESSAGE] 새 메시지 저장 중...")
     db.add(message)
     db.commit()
     db.refresh(message)
+    print(f"[MESSAGE] 메시지 저장 완료. ID: {message.id}")
     
     return MessageResponse(
         userMessage=message,
@@ -282,15 +301,21 @@ def save_stream_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
+    # user_name 검증 및 설정
+    user_name = current_user.loginid or current_user.username
+    if not user_name:
+        print(f"[ERROR] stream user_name이 없음. current_user: {current_user}")
+        raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")
+    
+    print(f"[STREAM] 사용자명 설정: {user_name}")
+    
     # 단일 메시지 생성 (질문과 답변 모두 포함)
     message = Message(
         conversation_id=conversation_id,
         role="user",
         question=message_request.question,
         ans=message_request.assistant_response or "",
-        model=message_request.model,
-        user_name=current_user.loginid or current_user.username,  # SSO 로그인 계정 ID 사용
-        image=message_request.image_url  # 이미지 URL 추가
+        user_name=user_name  # 검증된 사용자명 사용
     )
     db.add(message)
     db.commit()

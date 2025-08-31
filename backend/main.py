@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from app.routes import conversations, messages, llm, auth, websocket
+from app.routes import conversations, llm, auth, websocket
 from app.database import Base, engine
 
 # Create database tables
@@ -35,7 +35,7 @@ async def options_handler(request: Request, full_path: str):
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
-app.include_router(messages.router, prefix="/api", tags=["messages"])
+# messages router 제거됨 - conversations에서 처리
 app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
 app.include_router(websocket.router, tags=["websocket"])
 
