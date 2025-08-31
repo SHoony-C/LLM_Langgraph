@@ -8,6 +8,10 @@ import ChatHistory from './views/ChatHistory.vue'
 // OAuth 토큰 처리 함수
 async function processOAuthToken(idToken, state) {
   try {
+    // OAuth 처리 시작을 즉시 알림
+    console.log('[AUTH] processOAuthToken 시작 - oauth_processing 플래그 설정');
+    sessionStorage.setItem('oauth_processing', 'true');
+    
     // 요청 본문 구성
     const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
     
@@ -59,8 +63,50 @@ async function processOAuthToken(idToken, state) {
               user: responseData.user.username
             });
             
-            // 인증 성공 후 홈페이지로 이동
-            window.location.href = '/';
+            // 인증 성공 후 대화 목록 가져오기
+            console.log('[AUTH] 대화 목록 가져오기 시작');
+            try {
+              await store.dispatch('fetchConversations');
+              console.log('[AUTH] 대화 목록 가져오기 완료');
+            } catch (error) {
+              console.error('[AUTH] 대화 목록 가져오기 실패:', error);
+            }
+            
+            // 인증 성공 표시 및 Vue Router로 이동 (window.location 사용 금지)
+            hasProcessedOAuth = true;
+            isProcessingOAuth = false;
+            
+            // OAuth 처리 완료 플래그 설정
+            sessionStorage.setItem('sso_processed', 'true');
+            sessionStorage.removeItem('oauth_processing');
+            
+            console.log('[AUTH] OAuth 처리 완료, Vue Router로 이동');
+            
+            // Vue Router가 준비된 후 이동 (지연 증가)
+            setTimeout(() => {
+              if (router && router.push) {
+                console.log('[AUTH] 홈페이지로 이동 중...');
+                router.push('/').then(() => {
+                  console.log('[AUTH] 홈페이지 이동 완료');
+                  
+                  // 추가 대기 후 플래그 정리 (중복 리다이렉트 방지)
+                  setTimeout(() => {
+                    sessionStorage.setItem('sso_processed', 'true');
+                    sessionStorage.removeItem('oauth_processing');
+                    console.log('[AUTH] OAuth 플래그 최종 정리 완료');
+                  }, 500);
+                  
+                }).catch(error => {
+                  console.error('[AUTH] 홈페이지 이동 실패:', error);
+                  // 라우터 이동 실패 시 직접 URL 변경
+                  try {
+                    window.location.href = '/';
+                  } catch (e) {
+                    console.error('[AUTH] URL 변경도 실패:', e);
+                  }
+                });
+              }
+            }, 200); // 지연 시간 증가
             return;
           }
         } catch (parseError) {
@@ -82,6 +128,14 @@ async function processOAuthToken(idToken, state) {
                     loginid: userData.loginid,
                     id: userData.userid
                   }
+                });
+                
+                // 인증 성공 후 대화 목록 가져오기
+                console.log('[AUTH] localStorage 복원 후 대화 목록 가져오기');
+                store.dispatch('fetchConversations').then(() => {
+                  console.log('[AUTH] localStorage 복원 후 대화 목록 가져오기 완료');
+                }).catch(error => {
+                  console.error('[AUTH] localStorage 복원 후 대화 목록 가져오기 실패:', error);
                 });
                 
                 // 인증 성공 후 홈페이지로 이동
@@ -106,6 +160,10 @@ async function processOAuthToken(idToken, state) {
   } catch (error) {
     // 오류 발생 시 URL에서 OAuth 파라미터 제거
     window.history.replaceState({}, document.title, window.location.pathname);
+    
+    // 오류 발생 시 플래그 정리
+    sessionStorage.removeItem('oauth_processing');
+    console.error('[AUTH] processOAuthToken 오류:', error);
   }
 }
 
@@ -340,6 +398,14 @@ const store = createStore({
         conversation.messages.push(message);
       }
     },
+    addMessageToCurrentConversation(state, message) {
+      if (state.currentConversation) {
+        if (!Array.isArray(state.currentConversation.messages)) {
+          state.currentConversation.messages = [];
+        }
+        state.currentConversation.messages.push(message);
+      }
+    },
     updateFeedback(state, { conversationId, messageId, feedback }) {
       // 전체 conversations 배열을 완전히 새로 생성
       const newConversations = state.conversations.map(conversation => {
@@ -483,7 +549,7 @@ const store = createStore({
       state.isStreaming = isStreaming;
     },
     updateStreamingMessage(state, content) {
-      state.streamingMessage += content;
+      state.streamingMessage = content;
     },
     clearStreamingMessage(state) {
       state.streamingMessage = '';
@@ -527,16 +593,7 @@ const store = createStore({
       commit('setConversations', []);
       commit('setCurrentConversation', null);
       
-      // 구글 SSO로 즉시 리다이렉트
-      try {
-        window.location.replace('http://localhost:8001/api/auth/auth_sh');
-      } catch (error) {
-        try {
-          window.location = 'http://localhost:8001/api/auth/auth_sh';
-        } catch (error2) {
-          alert('인증 오류 리다이렉트에 실패했습니다. 수동으로 로그인해주세요.');
-        }
-      }
+      console.log('인증 오류 발생 - 상태 정리만 수행');
     },
     
     async register(context, userData) {
@@ -600,6 +657,9 @@ const store = createStore({
       commit('clearAuth');
       commit('setConversations', []);
       commit('setCurrentConversation', null);
+      
+      // OAuth 플래그 초기화
+      resetOAuthFlags();
     },
     
     async fetchConversations({ commit, state }) {
@@ -625,7 +685,7 @@ const store = createStore({
         if (!response.ok) {
           if (response.status === 401) {
             // 인증 오류인 경우 로그아웃 처리
-            await this.dispatch('handleAuthError');
+            commit('clearAuth');
             return;
           }
           throw new Error(`Error: ${response.status} ${response.statusText}`);
@@ -657,40 +717,66 @@ const store = createStore({
     
     async createConversation({ commit, state }) {
       try {
-        if (!state.isAuthenticated) return null;
+        console.log('[STORE] 새 대화 생성 시작...');
         
-        // 올바른 JWT 토큰을 localStorage에서 가져와서 사용
-        const headers = { 'Content-Type': 'application/json' };
-        const jwtToken = localStorage.getItem('access_token');
-        if (jwtToken) {
-          headers['Authorization'] = `Bearer ${jwtToken}`;
+        if (!state.isAuthenticated) {
+          console.error('[STORE] 인증되지 않음 - 대화 생성 불가');
+          return null;
         }
+        
+        // JWT 토큰 준비
+        const jwtToken = localStorage.getItem('access_token');
+        if (!jwtToken) {
+          console.error('[STORE] JWT 토큰 없음 - 대화 생성 불가');
+          return null;
+        }
+        
+        // 최적화된 요청 헤더
+        const headers = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwtToken}`
+        };
+        
+        // API 호출 (타임아웃 설정으로 더 빠른 응답)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
         
         const response = await fetch('http://localhost:8001/api/conversations', {
           method: 'POST',
           headers,
-          credentials: 'include' // 쿠키 포함
+          credentials: 'include',
+          signal: controller.signal
         });
         
+        clearTimeout(timeoutId);
+        
         if (!response.ok) {
-          // 401 에러인 경우 인증 에러 처리
           if (response.status === 401) {
-            await this.dispatch('handleAuthError');
+            console.error('[STORE] 인증 실패 - 로그아웃 처리');
+            commit('clearAuth');
             return null;
           }
-          throw new Error(`Status: ${response.status} ${response.statusText}`);
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
         const conversation = await response.json();
+        console.log('[STORE] 새 대화 생성 성공:', conversation.id);
         
+        // 상태 업데이트
         if (!Array.isArray(state.conversations)) {
           commit('setConversations', []);
         }
         
         commit('addConversation', conversation);
+        console.log('[STORE] 대화 목록에 추가 완료');
+        
         return conversation;
       } catch (error) {
-        console.error('Error creating conversation:', error);
+        if (error.name === 'AbortError') {
+          console.error('[STORE] 대화 생성 타임아웃');
+        } else {
+          console.error('[STORE] 대화 생성 오류:', error);
+        }
         return null;
       }
     },
@@ -705,9 +791,9 @@ const store = createStore({
           credentials: 'include' // 쿠키 포함
         });
         
-        // 401 에러인 경우 인증 에러 처리
+        // 401 에러인 경우 로그아웃 처리
         if (response.status === 401) {
-          await this.dispatch('handleAuthError');
+          commit('clearAuth');
           return;
         }
         
@@ -734,8 +820,7 @@ const store = createStore({
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify({ 
-            question: text, 
-            model: 'gpt-3.5-turbo' // 고정값으로 변경
+            question: text
           }),
           credentials: 'include' // 쿠키 포함
         });
@@ -805,7 +890,7 @@ const store = createStore({
           
           // 401 에러인 경우 로그아웃 처리
           if (response.status === 401) {
-            await this.dispatch('handleAuthError');
+            commit('clearAuth');
             return;
           }
           
@@ -897,16 +982,17 @@ const store = createStore({
           },
           body: JSON.stringify({ 
             question: text, 
-            model: 'gpt-3.5-turbo', // 고정값으로 변경
+
             conversation_id: currentConversationId
             }),
             credentials: 'include' // CORS 인증 정보 전송
         });
           
           if (!response.ok) {
-            // 401 에러인 경우 인증 에러 처리
+            // 401 에러인 경우 로그아웃 처리
             if (response.status === 401) {
-              await this.dispatch('handleAuthError');
+              commit('setIsStreaming', false);
+              commit('clearAuth');
               return;
             }
             throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
@@ -941,16 +1027,16 @@ const store = createStore({
                 // 이미지 URL이 JSON 형식으로 전송된 경우 처리
                 const jsonData = JSON.parse(content);
                 if (jsonData.text) {
-                  commit('updateStreamingMessage', jsonData.text);
                   accumulatedMessage += jsonData.text;
+                  commit('updateStreamingMessage', accumulatedMessage);
                 }
                 if (jsonData.image_url) {
                   imageUrl = jsonData.image_url;
                 }
               } catch (e) {
                 // JSON이 아닌 일반 텍스트인 경우
-                commit('updateStreamingMessage', content);
                 accumulatedMessage += content;
+                commit('updateStreamingMessage', accumulatedMessage);
               }
             }
           }
@@ -986,7 +1072,7 @@ const store = createStore({
           },
           body: JSON.stringify({ 
             question: text, 
-            model: 'gpt-3.5-turbo', // 고정값으로 변경
+
             assistant_response: accumulatedMessage,
             image_url: imageUrl // 이미지 URL 추가
               }),
@@ -1036,7 +1122,7 @@ const store = createStore({
             role: 'assistant',
             question: text,
             ans: '죄송합니다. 메시지를 처리하는 중 오류가 발생했습니다. 다시 시도해 주세요.',
-            model: 'gpt-3.5-turbo', // 고정값으로 변경
+
             created_at: new Date().toISOString()
           };
           
@@ -1116,7 +1202,18 @@ const store = createStore({
 
 // store 생성 후에 쿠키에서 인증 정보 초기화
 setTimeout(() => {
-      initializeAuthFromStorage();
+  // 페이지 새로고침 시 SSO 완료 플래그 정리 (새로운 세션이므로)
+  const currentUrl = window.location.href;
+  if (!currentUrl.includes('id_token') && !currentUrl.includes('code=') && !currentUrl.includes('state=')) {
+    // OAuth 콜백이 아닌 일반 페이지 접근 시에만 플래그 정리
+    if (performance.navigation.type === performance.navigation.TYPE_RELOAD || 
+        performance.navigation.type === performance.navigation.TYPE_NAVIGATE) {
+      console.log('[AUTH] 새로운 세션 시작 - OAuth 플래그 정리');
+      resetOAuthFlags();
+    }
+  }
+  
+  initializeAuthFromStorage();
   
   // OAuth 파라미터 확인 및 처리
   if (checkAndProcessOAuthParams()) {
@@ -1127,6 +1224,15 @@ setTimeout(() => {
 // OAuth 토큰 처리 중인지 확인하는 플래그
 let isProcessingOAuth = false;
 let hasProcessedOAuth = false; // OAuth 처리가 이미 완료되었는지 확인하는 플래그
+
+// OAuth 플래그 초기화 함수
+function resetOAuthFlags() {
+  isProcessingOAuth = false;
+  hasProcessedOAuth = false;
+  sessionStorage.removeItem('oauth_processing');
+  sessionStorage.removeItem('sso_processed');
+  console.log('[AUTH] OAuth 플래그 초기화됨');
+}
 
 const requireAuth = (to, from, next) => {
   // OAuth 콜백 경로인 경우 바로 통과
@@ -1139,7 +1245,7 @@ const requireAuth = (to, from, next) => {
   if (isProcessingOAuth) {
     // OAuth 처리 완료를 기다림 (최대 5초)
     let waitCount = 0;
-    const maxWait = 50; // 5초 (100ms * 100)
+    const maxWait = 50; // 5초 (100ms * 50)
     
     const checkAuth = () => {
       waitCount++;
@@ -1148,15 +1254,16 @@ const requireAuth = (to, from, next) => {
         if (store.state.isAuthenticated) {
           next();
         } else {
-          next(false);
+          next(false); // 인증 실패 시 페이지 접근 차단
+          // Google SSO로 리다이렉트
           setTimeout(() => {
             try {
               window.location.replace('http://localhost:8001/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location = 'http://localhost:8001/api/auth/auth_sh';
+                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
               } catch (error2) {
-                alert('OAuth 리다이렉트에 실패했습니다. 수동으로 로그인해주세요.');
+                alert('로그인이 필요합니다. 수동으로 로그인 페이지로 이동해주세요.');
               }
             }
           }, 100);
@@ -1187,6 +1294,7 @@ const requireAuth = (to, from, next) => {
         token: storedToken,
         user: userData
       });
+      console.log('[AUTH] localStorage에서 인증 정보 복원됨');
       next();
       return;
     } catch (error) {
@@ -1197,7 +1305,7 @@ const requireAuth = (to, from, next) => {
     }
   }
   
-  // URL에 OAuth 파라미터가 있는 경우 처리 중으로 표시 (구글 토큰은 백엔드로만 전송)
+  // URL에 OAuth 파라미터가 있는 경우 처리 중으로 표시
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token');
   const hash = window.location.hash;
@@ -1208,129 +1316,87 @@ const requireAuth = (to, from, next) => {
     return;
   }
   
-  // 이미 OAuth 처리가 완료된 경우 중복 처리 방지
-  if (hasProcessedOAuth) {
-    next();
-
-    return;
-  }
+  // OAuth 처리 완료 확인
+  const hasProcessedOAuth = sessionStorage.getItem('sso_processed') === 'true';
+  const isOAuthProcessing = sessionStorage.getItem('oauth_processing') === 'true';
   
-  // 모든 보호된 경로에서 구글 SSO로 리다이렉트
-  
-  // 강제 리다이렉트를 위한 여러 방법 시도
-  next(false);
-  
-  // 즉시 리다이렉트 시도 (타임아웃 없이)
-  
-  try {
-    // 방법 1: window.location.replace 사용
-    const redirectUrl = 'http://localhost:8001/api/auth/auth_sh';
+  if (hasProcessedOAuth || isOAuthProcessing) {
+    // OAuth 처리가 완료되었거나 진행 중인 경우
+    console.log('[AUTH] OAuth 처리 완료/진행 중 - 접근 허용');
     
-    // 현재 페이지와 리다이렉트 URL 비교
-    if (window.location.href === redirectUrl) {
+    // localStorage에서 토큰 확인으로 인증 상태 판단
+    const storedToken = localStorage.getItem('access_token');
+    const storedUserInfo = localStorage.getItem('user_info');
+    
+    if (storedToken && storedUserInfo) {
+      // localStorage에 인증 정보가 있으면 접근 허용
+      console.log('[AUTH] localStorage에 인증 정보 있음 - 접근 허용');
+      
+      // store 상태도 동기화
+      try {
+        const userData = JSON.parse(storedUserInfo);
+        store.commit('setAuth', {
+          token: storedToken,
+          user: userData
+        });
+      } catch (error) {
+        console.error('User info parsing error:', error);
+      }
+      
+      next();
+      return;
+    } else {
+      // OAuth 처리 중이지만 아직 토큰이 없는 경우 잠시 대기
+      console.log('[AUTH] OAuth 처리 중 - 토큰 설정 대기');
+      let retryCount = 0;
+      const maxRetries = 10; // 최대 5초 대기 (500ms * 10)
+      
+      const checkAuthState = () => {
+        retryCount++;
+        const currentToken = localStorage.getItem('access_token');
+        const currentUserInfo = localStorage.getItem('user_info');
+        
+        if (currentToken && currentUserInfo) {
+          console.log('[AUTH] 토큰 설정 완료 - 접근 허용');
+          try {
+            const userData = JSON.parse(currentUserInfo);
+            store.commit('setAuth', {
+              token: currentToken,
+              user: userData
+            });
+          } catch (error) {
+            console.error('User info parsing error:', error);
+          }
+          next();
+        } else if (retryCount >= maxRetries) {
+          console.log('[AUTH] 토큰 설정 타임아웃 - 접근 차단');
+          next(false);
+        } else {
+          setTimeout(checkAuthState, 500);
+        }
+      };
+      
+      setTimeout(checkAuthState, 500);
       return;
     }
-    
-    // 리다이렉트 시도
-    
-    // 먼저 백엔드 서버 연결 테스트
-    fetch('http://localhost:8001/api/auth/auth_sh', { 
-      method: 'HEAD',
-      mode: 'no-cors' // CORS 우회 시도
-    })
-    .then(() => {
-      // 서버가 응답하면 리다이렉트 실행
-      window.location.replace(redirectUrl);
-    })
-    .catch(() => {
-      // 서버 연결 실패해도 리다이렉트 시도
-      window.location.replace(redirectUrl);
-    });
-    
-    // 리다이렉트가 실제로 작동하는지 확인
-    setTimeout(() => {
-      if (window.location.href !== redirectUrl) {
-        // 방법 1: href 사용
-        try {
-          window.location.href = redirectUrl;
-        } catch (error) {
-          // 에러 처리
-        }
-        
-        // 방법 2: assign 사용
-        setTimeout(() => {
-          if (window.location.href !== redirectUrl) {
-            try {
-              window.location.assign(redirectUrl);
-            } catch (error) {
-              // 에러 처리
-            }
-          }
-        }, 200);
-        
-        // 방법 3: 직접 할당
-        setTimeout(() => {
-          if (window.location.href !== redirectUrl) {
-            try {
-              window.location = redirectUrl;
-            } catch (error) {
-              // 에러 처리
-            }
-          }
-        }, 400);
-        
-        // 방법 4: form submit을 통한 리다이렉트
-        setTimeout(() => {
-          if (window.location.href !== redirectUrl) {
-            try {
-              const form = document.createElement('form');
-              form.method = 'GET';
-              form.action = redirectUrl;
-              document.body.appendChild(form);
-              form.submit();
-            } catch (error) {
-              // 에러 처리
-            }
-          }
-        }, 600);
-        
-        // 방법 5: iframe을 통한 리다이렉트
-        setTimeout(() => {
-          if (window.location.href !== redirectUrl) {
-            try {
-              const iframe = document.createElement('iframe');
-              iframe.src = redirectUrl;
-              iframe.style.display = 'none';
-              document.body.appendChild(iframe);
-            } catch (error) {
-              // 에러 처리
-            }
-          }
-        }, 800);
-        
-        // 최후의 수단: 사용자에게 수동 리다이렉트 안내
-        setTimeout(() => {
-          if (window.location.href !== redirectUrl) {
-            alert(`인증이 필요합니다. 자동 리다이렉트에 실패했습니다.\n\n수동으로 다음 URL로 이동해주세요:\n${redirectUrl}`);
-          }
-        }, 1000);
-      }
-    }, 1000);
-    
-  } catch (error) {
+  }
+  
+  // 인증되지 않은 경우 Google SSO로 리다이렉트
+  console.log('[AUTH] 인증되지 않음 - Google SSO로 리다이렉트');
+  next(false);
+  
+  // Google SSO로 리다이렉트
+  setTimeout(() => {
     try {
-      // 방법 2: window.location.assign 사용
-      window.location.assign('http://localhost:8001/api/auth/auth_sh');
-    } catch (error2) {
-      // 방법 3: 직접 URL 변경
+      window.location.replace('http://localhost:8001/api/auth/auth_sh');
+    } catch (error) {
       try {
-        window.location = 'http://localhost:8001/api/auth/auth_sh';
-      } catch (error3) {
-        // 최후의 수단: 사용자에게 수동 리다이렉트 안내
-        alert('인증이 필요합니다. 자동 리다이렉트에 실패했습니다. 수동으로 로그인 페이지로 이동해주세요.');
+        window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+      } catch (error2) {
+        alert('로그인이 필요합니다. 수동으로 로그인 페이지로 이동해주세요.');
       }
     }
-  }
+  }, 100);
 };
 
 const router = createRouter({
@@ -1387,7 +1453,7 @@ const router = createRouter({
                 body: JSON.stringify({
                   username: user.username,
                   id_token: id_token,
-                  access_token: access_token,
+                  // access_token 제거 - 백엔드에서 사용하지 않음
                   is_sso: true
                 })
               })
@@ -1424,8 +1490,8 @@ const router = createRouter({
           console.error('Backend authentication failed:', error);
           // 백엔드 인증 실패 시 사용자에게 알림
           alert('백엔드 인증에 실패했습니다. 다시 시도해주세요.');
-          // 인증 실패 시 SSO 페이지로 리다이렉트
-          window.location.replace('http://localhost:8001/api/auth/auth_sh');
+          // 인증 실패 시 상태만 정리
+          console.log('백엔드 인증 실패 - 상태 정리');
         })
               .finally(() => {
                 // 대화 초기화 시도
@@ -1440,17 +1506,21 @@ const router = createRouter({
                     isProcessingOAuth = false; // OAuth 처리 완료
                     hasProcessedOAuth = true; // OAuth 처리 완료 플래그 설정
                     
+                    // OAuth 처리 완료 플래그 설정
+                    sessionStorage.setItem('sso_processed', 'true');
+                    sessionStorage.removeItem('oauth_processing');
+                    
                     // 인증 상태가 제대로 설정되었는지 확인
                     if (store.state.isAuthenticated && localStorage.getItem('access_token')) {
                       router.push('/');
                     } else {
                       try {
-                        window.location.replace('http://localhost:8001/api/auth/auth_sh');
+                        console.log('인증 실패 - 상태만 정리');
                       } catch (error) {
                         try {
-                          window.location = 'http://localhost:8001/api/auth/auth_sh';
+                          console.log('OAuth 처리 실패 - 상태만 정리');
                         } catch (error2) {
-                          alert('OAuth 콜백 리다이렉트에 실패했습니다. 수동으로 로그인해주세요.');
+                          console.log('OAuth 인증 실패 - 상태만 정리');
                         }
                       }
                     }
@@ -1472,8 +1542,22 @@ const router = createRouter({
 
 // Check for token in URL (from OAuth redirect)
 const checkForAuthToken = () => {
+  // 로그아웃 직후인 경우 OAuth 처리 건너뛰기
+  const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
+  if (isLogoutRedirect) {
+    console.log('[AUTH] 로그아웃 직후 - OAuth 처리 건너뛰기');
+    return;
+  }
+  
   // 이미 OAuth 처리가 완료된 경우 중복 처리 방지
+  console.log('[AUTH] checkForAuthToken 시작:', {
+    hasProcessedOAuth,
+    isProcessingOAuth,
+    currentUrl: window.location.href
+  });
+  
   if (hasProcessedOAuth) {
+    console.log('[AUTH] OAuth 이미 처리됨, 중복 실행 방지');
     return;
   }
   
@@ -1492,6 +1576,11 @@ const checkForAuthToken = () => {
     const state = hashParams.get('state');
     
     if (idToken && state) {
+      // OAuth 처리 시작을 즉시 알림
+      console.log('[AUTH] OAuth 파라미터 발견 - 처리 시작');
+      sessionStorage.setItem('oauth_processing', 'true');
+      sessionStorage.removeItem('sso_processed'); // 기존 완료 플래그 제거
+      
       // 해시 제거
       const url = new URL(window.location);
       url.hash = '';
@@ -1499,6 +1588,10 @@ const checkForAuthToken = () => {
       
       // 백엔드로 Google OAuth 파라미터 전송 (프론트엔드에서는 구글 토큰을 절대 사용하지 않음)
       processOAuthToken(idToken, state);
+      
+      // OAuth 처리 완료 표시
+      hasProcessedOAuth = true;
+      isProcessingOAuth = false;
       return; // 함수 종료
     }
   }
@@ -1510,17 +1603,24 @@ const checkForAuthToken = () => {
     url.search = '';
     window.history.replaceState({}, document.title, url);
     
-    // Login with token
-    store.dispatch('loginWithToken', token)
-      .then(() => {
-        isProcessingOAuth = false;
-        router.push('/');
-      })
-      .catch(error => {
-        console.error("Auto-login failed:", error);
-        isProcessingOAuth = false;
-        router.push('/login');
-      });
+    // Login with token (OAuth 처리가 완료되지 않은 경우에만)
+    if (!hasProcessedOAuth) {
+      store.dispatch('loginWithToken', token)
+        .then(() => {
+          hasProcessedOAuth = true;
+          isProcessingOAuth = false;
+          console.log('[AUTH] 토큰 로그인 완료, 홈으로 이동');
+          router.push('/');
+        })
+        .catch(error => {
+          console.error("Auto-login failed:", error);
+          isProcessingOAuth = false;
+          router.push('/login');
+        });
+    } else {
+      console.log('[AUTH] OAuth 이미 처리됨, 중복 실행 방지');
+      isProcessingOAuth = false;
+    }
   } else {
     // 토큰이 없는 경우 처리 완료
     isProcessingOAuth = false;

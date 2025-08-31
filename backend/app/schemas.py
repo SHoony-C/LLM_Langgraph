@@ -89,18 +89,14 @@ class MessageBase(BaseModel):
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
-    model: Optional[str] = "gpt-3.5-turbo"
-    image: Optional[str] = None
     feedback: Optional[str] = None
 
 class MessageCreate(BaseModel):
     question: str
     ans: Optional[str] = None  # 답변 필드 추가
     role: Optional[str] = "user"  # 역할 필드 추가
-    model: str = "gpt-3.5-turbo"
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     assistant_response: Optional[str] = None
-    image_url: Optional[str] = None
     user_name: Optional[str] = None
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
@@ -132,7 +128,6 @@ class Conversation(ConversationBase):
 # API request and response schemas
 class MessageRequest(BaseModel):
     question: str
-    model: str = "gpt-3.5-turbo"
     user_name: Optional[str] = None
     skip_llm: Optional[bool] = False  # LLM 재호출 방지 플래그
     assistant_response: Optional[str] = None  # 이미 생성된 답변 (skip_llm이 true일 때 사용)

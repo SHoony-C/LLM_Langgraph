@@ -51,13 +51,11 @@ PORT = 8001
 IDP_Config = {
     'ClientId': '844891853332-s785qgm7br1io04pbvtpsic4kqce8d7o.apps.googleusercontent.com',  # Google OAuth Client ID
     'RedirectUri': 'http://localhost:8001/api/auth/acs',  # Callback URL
-    'AuthorizeUrl': 'https://accounts.google.com/o/oauth2/v2/auth',  # Google OAuth endpoint
-    'Idp.SignoutUrl': 'https://accounts.google.com/logout',  # Google logout URL
+    'AuthorizeUrl': 'https://accounts.google.com/o/oauth2/v2/auth',  # Google OAuth endpoint (초기 로그인에만 사용)
     'CertFile_Path': './certificates/',  # Directory where certificates are stored
     'CertFile_Name': 'public_key.pem',  # Public key file name for JWT verification
     'Frontend_Redirect_Uri': 'http://localhost:8081/',  # Frontend URL to redirect after auth
     'Scopes': 'openid email profile',  # OAuth scopes
-    'ResponseType': 'code',  # OAuth response type (authorization code flow)
+    'ResponseType': 'id_token',  # OAuth response type (implicit flow with id_token only)
     'UsePublicClient': True,  # Set to True for public client (no client secret)
-    'TokenEndpoint': 'https://oauth2.googleapis.com/token',  # Google OAuth token endpoint
 } 

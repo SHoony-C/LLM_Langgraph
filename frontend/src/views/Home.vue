@@ -116,7 +116,7 @@
               <div class="answer-section">
                 <div v-if="currentStep >= 3 && isGeneratingAnswer" class="generating-indicator">
                   <div class="spinner"></div>
-                  <span>답변 생성 중...</span>
+                  <span>🤖 AI가 검색 결과를 분석하여 답변을 생성하고 있습니다...</span>
                 </div>
                 <div v-else-if="currentStep >= 3 && finalAnswer" class="final-answer">
                   <label>최종 답변:</label>
@@ -642,21 +642,23 @@ export default {
     },
     
     async newConversation() {
-      await this.$store.dispatch('createConversation');
-      this.userInput = '';
+      console.log('🔄 새 대화 UI 초기화 시작...');
       
-      // 새 대화 시 모든 랭그래프 관련 데이터 완전 초기화
+      // 즉시 UI 상태만 초기화 (백엔드는 실제 메시지 전송 시 생성)
+      this.userInput = '';
       this.resetRangraphState();
       this.rangraphHistory = [];
-      
-      // 추가로 남아있을 수 있는 데이터들도 초기화
       this.finalAnswer = '';
       this.searchResults = [];
       this.extractedKeywords = null;
       this.extractedDbSearchTitle = null;
       
-      console.log('🔄 새 대화 시작 - 모든 랭그래프 데이터 초기화 완료');
+      // 현재 대화를 null로 설정하여 새 대화 상태로 만듦
+      this.$store.commit('setCurrentConversation', null);
       
+      console.log('✅ 새 대화 UI 초기화 완료 (실제 대화는 첫 메시지 전송 시 생성)');
+      
+      // DOM 업데이트
       this.$nextTick(() => {
         this.scrollToBottom();
         this.safeFocus();
@@ -689,34 +691,18 @@ export default {
       // this.isLoading = true; // 이 줄 제거
       
       try {
-        // 첫 번째 질문인지 확인 (더 정확한 판단)
+        // 첫 번째 질문인지 확인 (단순화된 로직)
         const currentConversation = this.$store.state.currentConversation;
         const hasMessages = currentConversation && currentConversation.messages && currentConversation.messages.length > 0;
-        const isRangraphCompleted = this.showRangraph && this.currentStep >= 4;
         
-        // NEW CONVERSATION 확인: 대화가 없거나 메시지가 없는 경우
-        const isNewConversation = !currentConversation || !hasMessages;
+        // 간단한 분기: 메시지가 없으면 첫 번째 질문 (랭그래프), 있으면 추가 질문 (일반 LLM)
+        const shouldRunRangraph = !hasMessages;
         
-        // 첫 번째 질문: NEW CONVERSATION이거나 랭그래프가 완료되지 않은 경우
-        const isFirstQuestion = isNewConversation || !isRangraphCompleted;
-        
-        // 추가 검증: 현재 질문이 이미 처리되었는지 확인 (기존 대화가 있는 경우에만)
-        const isQuestionAlreadyProcessed = hasMessages && currentConversation.messages.some(msg => 
-          msg.question === messageText && msg.q_mode === 'search'
-        );
-        
-        // 최종 첫 번째 질문 판단: NEW CONVERSATION이거나 첫 번째 질문이면서 아직 처리되지 않은 경우
-        const shouldRunRangraph = isFirstQuestion && (isNewConversation || !isQuestionAlreadyProcessed);
-        
-        console.log('질문 타입 판단 (강화된 로직):', {
+        console.log('📋 질문 타입 판단:', {
+          currentConversationId: currentConversation?.id,
           hasMessages,
-          showRangraph: this.showRangraph,
-          currentStep: this.currentStep,
-          isRangraphCompleted,
-          isNewConversation,
-          isFirstQuestion,
-          isQuestionAlreadyProcessed,
-          shouldRunRangraph,
+          messageCount: currentConversation?.messages?.length || 0,
+          shouldRunRangraph: shouldRunRangraph ? '🔬 랭그래프' : '💬 일반 LLM',
           messageText: messageText.substring(0, 50) + '...'
         });
         
@@ -745,49 +731,153 @@ export default {
     
 
     
-    // 심플한 LLM 답변 플로우 (첫 번째 이후 질문용)
+    // 심플한 LLM 답변 플로우 (첫 번째 이후 질문용) - 스트리밍 지원
     async executeSimpleLLMFlow(inputText) {
       try {
-        console.log('💬 일반 LLM 답변 실행 시작:', inputText);
+        console.log('💬 일반 LLM 스트리밍 답변 실행 시작:', inputText);
         
-        // LLM API를 직접 호출하여 심플한 답변 생성
-        const response = await fetch('http://localhost:8001/api/llm/chat', {
+        // 먼저 사용자 질문을 즉시 화면에 표시
+        const userMessage = {
+          id: Date.now(),
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'user',
+          question: inputText,
+          ans: null,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 사용자 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', userMessage);
+        
+        // 스트리밍 시작
+        this.$store.commit('setIsStreaming', true);
+        this.$store.commit('setStreamingMessage', '');
+        
+        // 스트리밍 LLM API 호출
+        const response = await fetch('http://localhost:8001/api/llm/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify({
             question: inputText,
-            model: 'gpt-3.5-turbo'
+            conversation_id: this.$store.state.currentConversation?.id
           })
         });
         
         if (!response.ok) {
-          throw new Error(`LLM API 호출 실패 (${response.status}: ${response.statusText})`);
+          throw new Error(`LLM 스트리밍 API 호출 실패 (${response.status}: ${response.statusText})`);
         }
         
-        const result = await response.json();
-        console.log('✅ 일반 LLM 답변 생성 완료:', result);
+        // 스트리밍 응답 처리
+        console.log('📡 executeSimpleLLMFlow 스트리밍 응답 처리 시작...');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedMessage = '';
         
-        // LLM 답변을 메시지로 저장 (q_mode: 'add')
+        let streamingActive = true;
+        let chunkCount = 0;
+        while (streamingActive) {
+          const { value, done } = await reader.read();
+          if (done) {
+            console.log('📡 executeSimpleLLMFlow 스트리밍 완료 - done=true');
+            streamingActive = false;
+            break;
+          }
+          
+          chunkCount++;
+          const chunk = decoder.decode(value);
+          console.log(`📡 executeSimpleLLMFlow 청크 ${chunkCount} 수신:`, chunk);
+          const lines = chunk.split('\n\n');
+          console.log(`📡 executeSimpleLLMFlow 청크 ${chunkCount}에서 ${lines.length}개 라인 분리`);
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const content = line.substring(6);
+              console.log(`📡 executeSimpleLLMFlow 데이터 라인 처리: "${content}"`);
+              
+              if (content === '[DONE]') {
+                console.log('📡 executeSimpleLLMFlow [DONE] 신호 수신 - 스트리밍 종료');
+                streamingActive = false;
+                break;
+              }
+              
+              try {
+                // JSON 형태의 데이터인지 확인
+                const jsonData = JSON.parse(content);
+                if (jsonData.text) {
+                  console.log('📡 executeSimpleLLMFlow JSON 데이터 처리:', jsonData.text);
+                  accumulatedMessage += jsonData.text;
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                }
+              } catch (e) {
+                // JSON이 아닌 일반 텍스트인 경우
+                console.log('📡 executeSimpleLLMFlow 텍스트 데이터 처리:', content);
+                accumulatedMessage += content;
+                this.$store.commit('updateStreamingMessage', accumulatedMessage);
+              }
+            } else if (line.trim()) {
+              console.log(`📡 executeSimpleLLMFlow 비-데이터 라인 무시: "${line}"`);
+            }
+          }
+        }
+        
+        console.log(`📡 executeSimpleLLMFlow 스트리밍 최종 완료 - 총 ${chunkCount}개 청크 처리`);
+        console.log(`📡 executeSimpleLLMFlow 누적된 메시지 길이: ${accumulatedMessage.length}자`);
+        console.log(`📡 executeSimpleLLMFlow 누적된 메시지 내용: "${accumulatedMessage}"`);
+        
+        console.log('✅ 일반 LLM 스트리밍 답변 생성 완료');
+        
+        // 스트리밍된 메시지를 assistant 메시지로 현재 대화에 추가
+        const assistantMessage = {
+          id: Date.now() + 1,
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'assistant',
+          question: inputText,
+          ans: accumulatedMessage || '답변을 생성할 수 없습니다.',
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 assistant 메시지 추가 (화면에 유지)
+        this.$store.commit('addMessageToCurrentConversation', assistantMessage);
+        
+        // 스트리밍 완료 (스트리밍 UI 숨김)
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 메시지 저장 (q_mode: 'add')
         console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
-        await this.saveAdditionalQuestionMessage(inputText, result.response || '답변을 생성할 수 없습니다.');
+        await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
         
-        // 답변을 화면에 표시 (랭그래프 없이)
-        this.finalAnswer = result.response || '답변을 생성할 수 없습니다.';
+        // finalAnswer는 설정하지 않음 (currentMessages에서 표시하므로)
         
         console.log('💾 일반 LLM 답변 저장 및 표시 완료');
         
       } catch (error) {
-        console.error('심플 LLM 답변 실행 오류:', error);
-        // 오류 발생 시 간단한 메시지 표시
-        this.finalAnswer = `⚠️ **오류 발생**: ${error.message}`;
-        await this.saveAdditionalQuestionMessage(inputText, this.finalAnswer);
+        console.error('심플 LLM 스트리밍 답변 실행 오류:', error);
+        
+        // 오류 메시지를 assistant 메시지로 추가
+        const errorMessage = {
+          id: Date.now() + 3,
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'assistant',
+          question: inputText,
+          ans: `⚠️ **오류 발생**: ${error.message}`,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 오류 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', errorMessage);
+        
+        // 스트리밍 중단
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 오류 메시지도 저장
+        await this.saveAdditionalQuestionMessage(inputText, `⚠️ **오류 발생**: ${error.message}`);
       }
     },
     
-    // 추가 질문 플로우 실행 (두 번째 질문부터)
+    // 추가 질문 플로우 실행 (두 번째 질문부터) - 스트리밍 지원
     async executeAdditionalQuestionFlow(inputText) {
       try {
         // 기존 랭그래프를 히스토리에 저장
@@ -795,37 +885,128 @@ export default {
           this.saveRangraphToHistory();
         }
         
-        // LLM API를 직접 호출하여 추가 질문에 답변
-        const response = await fetch('http://localhost:8001/api/llm/chat', {
+        console.log('💬 추가 질문 스트리밍 답변 실행 시작:', inputText);
+        
+        // 먼저 사용자 질문을 즉시 화면에 표시
+        const userMessage = {
+          id: Date.now(),
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'user',
+          question: inputText,
+          ans: null,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 사용자 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', userMessage);
+        
+        // 스트리밍 시작
+        this.$store.commit('setIsStreaming', true);
+        this.$store.commit('setStreamingMessage', '');
+        
+        // 스트리밍 LLM API 호출하여 추가 질문에 답변
+        const response = await fetch('http://localhost:8001/api/llm/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify({
             question: inputText,
-            model: 'gpt-3.5-turbo'
+            conversation_id: this.$store.state.currentConversation?.id
           })
         });
         
         if (!response.ok) {
-          throw new Error(`LLM API 호출 실패 (${response.status}: ${response.statusText})`);
+          throw new Error(`LLM 스트리밍 API 호출 실패 (${response.status}: ${response.statusText})`);
         }
         
-        const result = await response.json();
+        // 스트리밍 응답 처리
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedMessage = '';
         
-        // LLM 답변을 메시지로 저장 (q_mode: 'add')
+        let streamingActive = true;
+        while (streamingActive) {
+          const { value, done } = await reader.read();
+          if (done) {
+            streamingActive = false;
+            break;
+          }
+          
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const content = line.substring(6);
+              
+              if (content === '[DONE]') {
+                streamingActive = false;
+                break;
+              }
+              
+              try {
+                // JSON 형태의 데이터인지 확인
+                const jsonData = JSON.parse(content);
+                if (jsonData.text) {
+                  accumulatedMessage += jsonData.text;
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                }
+              } catch (e) {
+                // JSON이 아닌 일반 텍스트인 경우
+                accumulatedMessage += content;
+                this.$store.commit('updateStreamingMessage', accumulatedMessage);
+              }
+            }
+          }
+        }
+        
+        console.log('✅ 추가 질문 스트리밍 답변 생성 완료');
+        
+        // 스트리밍된 메시지를 assistant 메시지로 현재 대화에 추가
+        const assistantMessage = {
+          id: Date.now() + 2,
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'assistant',
+          question: inputText,
+          ans: accumulatedMessage || '답변을 생성할 수 없습니다.',
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 assistant 메시지 추가 (화면에 유지)
+        this.$store.commit('addMessageToCurrentConversation', assistantMessage);
+        
+        // 스트리밍 완료 (스트리밍 UI 숨김)
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 메시지 저장 (q_mode: 'add')
         console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
-        await this.saveAdditionalQuestionMessage(inputText, result.response || '답변을 생성할 수 없습니다.');
+        await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
         
-        // 답변을 화면에 표시
-        this.finalAnswer = result.response || '답변을 생성할 수 없습니다.';
+        // finalAnswer는 설정하지 않음 (currentMessages에서 표시하므로)
         
       } catch (error) {
-        console.error('추가 질문 실행 오류:', error);
-        // 오류 발생 시 간단한 메시지 표시
-        this.finalAnswer = `⚠️ **오류 발생**: ${error.message}`;
-        await this.saveAdditionalQuestionMessage(inputText, this.finalAnswer);
+        console.error('추가 질문 스트리밍 실행 오류:', error);
+        
+        // 오류 메시지를 assistant 메시지로 추가
+        const errorMessage = {
+          id: Date.now() + 4,
+          conversation_id: this.$store.state.currentConversation?.id,
+          role: 'assistant',
+          question: inputText,
+          ans: `⚠️ **오류 발생**: ${error.message}`,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 오류 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', errorMessage);
+        
+        // 스트리밍 중단
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 오류 메시지도 저장
+        await this.saveAdditionalQuestionMessage(inputText, `⚠️ **오류 발생**: ${error.message}`);
       }
     },
     
@@ -845,7 +1026,6 @@ export default {
         // 메시지 생성 API 호출 (q_mode: 'add')
         const requestBody = { 
           question: question,
-          model: 'gpt-3.5-turbo',
           q_mode: 'add',  // 추가 질문 모드
           assistant_response: answer,
           keyword: null,  // 추가 질문에는 키워드 없음
@@ -859,7 +1039,7 @@ export default {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify(requestBody)
         });
@@ -872,13 +1052,13 @@ export default {
           console.log('✅ 추가 질문 메시지가 성공적으로 저장되었습니다.');
           this.saveStatus = '';
           
-          // 대화 목록 새로고침
-          await this.$store.dispatch('fetchConversations');
+          // 대화 목록 새로고침 제거 - 이미 화면에 메시지가 표시되어 있으므로
+          // await this.$store.dispatch('fetchConversations');
           
-          // 화면에 즉시 반영되도록 강제 업데이트
-          this.$nextTick(() => {
-            this.$forceUpdate();
-          });
+          // 화면에 즉시 반영되도록 강제 업데이트도 제거
+          // this.$nextTick(() => {
+          //   this.$forceUpdate();
+          // });
         } else if (response.status === 401) {
           // 인증 실패 시 토큰 갱신 시도
           console.error('❌ 인증 실패 (401). 토큰 갱신 시도...');
@@ -1001,8 +1181,7 @@ export default {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            question: inputText,
-            model: 'gpt-3.5-turbo'
+            question: inputText
           })
         });
         
@@ -1118,10 +1297,12 @@ export default {
     
     // WebSocket 메시지 처리
     handleWebSocketMessage(data) {
-      console.log('WebSocket 메시지 수신:', data);
-      console.log('메시지 노드:', data.node);
-      console.log('메시지 상태:', data.status);
-      console.log('메시지 데이터:', data.data);
+      console.log('📡 WebSocket 메시지 수신:', data);
+      console.log('📡 메시지 노드:', data.node);
+      console.log('📡 메시지 상태:', data.status);
+      console.log('📡 메시지 데이터:', data.data);
+      console.log('📡 현재 단계:', this.currentStep);
+      console.log('📡 현재 키워드 개수:', this.augmentedKeywords?.length || 0);
       
       if (data.node === 'node_init' && data.status === 'completed') {
         this.currentStep = 1;
@@ -1132,7 +1313,12 @@ export default {
           this.$forceUpdate();
         });
       } else if (data.node === 'node_rc_keyword' && data.status === 'completed') {
-        console.log('키워드 노드 완료 - 데이터:', data.data.result);
+        console.log('🔑 키워드 노드 완료 - 전체 데이터:', data);
+        console.log('🔑 키워드 노드 완료 - result 데이터:', data.data?.result);
+        console.log('🔑 키워드 노드 완료 - result 타입:', typeof data.data?.result);
+        console.log('🔑 키워드 노드 완료 - result 길이:', data.data?.result?.length);
+        
+        if (data.data && data.data.result && Array.isArray(data.data.result)) {
         this.currentStep = 2;
         this.isSearching = true; // 키워드 생성 완료 후 검색 시작
         this.augmentedKeywords = data.data.result.map((keyword, index) => ({
@@ -1143,16 +1329,21 @@ export default {
         
         // 키워드 추출하여 저장
         this.extractedKeywords = data.data.result;
-        console.log('extractedKeywords 설정됨:', this.extractedKeywords);
+          console.log('🔑 extractedKeywords 설정됨:', this.extractedKeywords);
+          console.log('🔑 augmentedKeywords 설정됨:', this.augmentedKeywords);
         
         // 강제 리렌더링
         this.$nextTick(() => {
           this.$forceUpdate();
         });
+        } else {
+          console.error('🔑 키워드 데이터 형식 오류:', data);
+        }
       } else if (data.node === 'node_rc_rag' && data.status === 'completed') {
         console.log('RAG 노드 완료 - 데이터:', data.data.result);
-        this.currentStep = 2;
+        this.currentStep = 3; // 3단계로 이동 (답변 생성)
         this.isSearching = false; // 검색 완료
+        this.isGeneratingAnswer = true; // 답변 생성 시작
         
         // 검색 결과를 올바른 구조로 저장
         this.searchResults = data.data.result;
@@ -1177,6 +1368,7 @@ export default {
       } else if (data.node === 'node_rc_answer' && data.status === 'completed') {
         console.log('답변 노드 완료 - 데이터:', data.data.result);
         this.currentStep = 4;
+        this.isGeneratingAnswer = false; // 답변 생성 완료
         this.finalAnswer = data.data.result.answer;
         console.log('finalAnswer 설정됨:', this.finalAnswer);
         
@@ -1202,13 +1394,14 @@ export default {
         
         // LangGraph 완료 후 결과 저장 (즉시 실행)
         console.log('LangGraph 완료, 저장 함수 호출 시작...');
-        this.saveLangGraphMessageFromWebSocket();
+        // 중복 호출 방지 - 이미 아래에서 호출됨
         
         // 강제 리렌더링
         this.$nextTick(() => {
           this.$forceUpdate();
         });
       } else if ((data.node === 'node_rc_answer' || data.node === 'node_rc_plain_answer') && data.status === 'completed') {
+        this.isGeneratingAnswer = false; // 답변 생성 완료
         console.log(`${data.node} 노드 완료 - 데이터:`, data.data.result);
         this.currentStep = 4;
         this.finalAnswer = data.data.result.answer || data.data.result;
@@ -1271,6 +1464,13 @@ export default {
       } else if (data.node === 'node_rc_plain_answer' && data.status === 'streaming') {
         // LLM Streaming 응답 처리
         console.log('LLM Streaming 응답:', data.data);
+        
+        // 스트리밍 시작 시 답변 생성 상태로 설정
+        if (!this.isGeneratingAnswer) {
+          this.isGeneratingAnswer = true;
+          this.currentStep = 3; // 3단계로 설정
+        }
+        
         if (data.data && data.data.content) {
           // 스트리밍 응답을 누적
           if (!this.finalAnswer) {
@@ -1348,7 +1548,7 @@ export default {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           }
         });
         
@@ -1374,6 +1574,12 @@ export default {
     async saveLangGraphMessageFromWebSocket() {
       try {
         console.log('🔄 saveLangGraphMessageFromWebSocket 함수 시작');
+        
+        // 중복 저장 방지 - 이미 저장 중이면 리턴
+        if (this.isSavingMessage) {
+          console.log('⚠️ 이미 저장 중입니다. 중복 호출 방지.');
+          return;
+        }
         
         // 저장 상태 업데이트
         this.isSavingMessage = true;
@@ -1421,7 +1627,6 @@ export default {
           question: question,
           ans: answer,  // ans 필드로 전송
           role: "user",
-          model: 'gpt-3.5-turbo',
           q_mode: 'search',  // LangGraph 실행은 항상 검색 모드
           assistant_response: answer,  // 백엔드 호환성을 위해 유지
           keyword: keywordData,
@@ -1453,7 +1658,7 @@ export default {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify(requestBody)
         });
@@ -1530,22 +1735,15 @@ export default {
           this.saveStatus = `⚠️ 메시지 저장 실패: ${errorMessage}`;
           console.error('💾 저장 실패 상태 설정:', this.saveStatus);
           
-          // 저장 실패 시 재시도 로직 추가
-          console.log('🔄 2초 후 LangGraph 메시지 저장 재시도 예약...');
-          setTimeout(() => {
-            console.log('🔄 LangGraph 메시지 저장 재시도 시작...');
-            this.saveLangGraphMessageFromWebSocket();
-          }, 2000);
+          // 저장 실패 시 재시도 로직 제거 - 중복 저장 방지
+          console.log('❌ LangGraph 메시지 저장 실패. 재시도하지 않음.');
         }
       } catch (error) {
         console.error('WebSocket LangGraph 메시지 저장 중 오류:', error);
         this.saveStatus = `⚠️ 메시지 저장 오류: ${error.message}`;
         
-        // 오류 발생 시 재시도 로직 추가
-        setTimeout(() => {
-          console.log('🔄 LangGraph 메시지 저장 재시도...');
-          this.saveLangGraphMessageFromWebSocket();
-        }, 3000);
+        // 오류 발생 시 재시도 로직 제거 - 중복 저장 방지
+        console.log('❌ LangGraph 메시지 저장 오류. 재시도하지 않음.');
       } finally {
         this.isSavingMessage = false;
       }
@@ -1574,11 +1772,10 @@ export default {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify({ 
             question: question,
-            model: 'gpt-3.5-turbo',
             q_mode: 'search',  // LangGraph 실행은 항상 검색 모드
             assistant_response: answer,
             keyword: this.extractedKeywords,
@@ -1648,11 +1845,10 @@ LangGraph API 연결에 실패했습니다.
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.$store.state.token}`
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           },
           body: JSON.stringify({ 
             question: question,
-            model: 'gpt-3.5-turbo',
             q_mode: 'search',  // 오류 메시지도 검색 모드로 저장
             assistant_response: answer,
             keyword: '오류, 시스템 오류',
@@ -1944,1518 +2140,6 @@ LangGraph API 연결에 실패했습니다.
 };
 </script>
 
-<style scoped>
-.home {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-  position: relative;
-  overflow: hidden;
-}
-
-.home::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23667eea' fill-opacity='0.06'%3E%3Ccircle cx='40' cy='40' r='6'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-  animation: float 30s ease-in-out infinite;
-  z-index: 0;
-}
-
-@keyframes messageSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(20px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes messagePulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.02); }
-}
-
-@keyframes gradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-
-@keyframes typing {
-  0%, 50%, 100% { opacity: 1; }
-  25%, 75% { opacity: 0.5; }
-}
-
-.chat-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  position: relative;
-  z-index: 1;
-}
-
-.chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px 20px 120px;
-  scroll-behavior: smooth;
-  background: rgba(255, 255, 255, 0.02);
-  backdrop-filter: blur(10px);
-}
-
-.chat-messages::-webkit-scrollbar {
-  width: 8px;
-}
-
-.chat-messages::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-}
-
-.chat-messages::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-  border-radius: 4px;
-}
-
-.empty-state {
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--light-text);
-  text-align: center;
-  animation: fadeInUp 1s ease-out;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.empty-illustration {
-  margin-bottom: 24px;
-  position: relative;
-}
-
-.empty-icon {
-  width: 120px;
-  height: 120px;
-  color: #667eea;
-  filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.3));
-  animation: float 6s ease-in-out infinite;
-}
-
-.empty-state p {
-  font-size: 1.2rem;
-  font-weight: 500;
-  margin: 0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.messages-container {
-  width: 100%;
-  max-width: 100%;
-}
-
-.messages-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  width: 100%;
-  transform: translateZ(0);
-  contain: content;
-  padding-bottom: 10px;
-}
-
-.message {
-  display: flex;
-  gap: 12px;
-  position: relative;
-}
-
-.message.user {
-  justify-content: flex-end;
-  align-items: flex-start;
-}
-
-.message.user .message-content {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  background-size: 200% 200%;
-  color: white;
-  border-radius: 18px 18px 4px 18px;
-  padding: 16px 20px;
-  max-width: 70%;
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
-  animation: gradientShift 3s ease infinite;
-  position: relative;
-  overflow: hidden;
-}
-
-.message.user .message-content::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-  transition: left 0.6s;
-}
-
-.message.user .message-content:hover::before {
-  left: 100%;
-}
-
-.message.assistant {
-  align-items: flex-start;
-  flex-direction: row;
-}
-
-.message.assistant .message-content {
-  background: linear-gradient(135deg, #5a67d8 0%, #667eea 100%);
-  background-size: 200% 200%;
-  color: white;
-  border-radius: 18px 18px 18px 4px;
-  padding: 16px 20px;
-  max-width: 75%;
-  box-shadow: 0 8px 25px rgba(90, 103, 216, 0.3);
-  animation: gradientShift 4s ease infinite;
-  position: relative;
-  overflow: hidden;
-}
-
-.message.assistant .message-content::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-  transition: left 0.6s;
-}
-
-.message.assistant .message-content:hover::before {
-  left: 100%;
-}
-
-.message.streaming .message-content {
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-  background-size: 200% 200%;
-  animation: gradientShift 2s ease infinite;
-}
-
-.message-text {
-  font-size: 0.95rem;
-  line-height: 1.6;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-}
-
-.message-image {
-  margin-top: 12px;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
-}
-
-.message-image img {
-  width: 100%;
-  height: auto;
-  display: block;
-  transition: transform 0.3s ease;
-}
-
-.message-image:hover img {
-  transform: scale(1.05);
-}
-
-.message-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  opacity: 0;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  transform: translateX(-10px);
-}
-
-.message.assistant:hover .message-actions {
-  opacity: 1;
-  transform: translateX(0);
-}
-
-.action-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  position: relative;
-  overflow: hidden;
-}
-
-.action-btn::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-  opacity: 0;
-  transition: opacity 0.3s;
-  border-radius: 50%;
-}
-
-.action-btn:hover::before {
-  opacity: 1;
-}
-
-.action-btn.thumbs-up::before {
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-}
-
-.action-btn.thumbs-down::before {
-  background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
-}
-
-.action-btn:hover {
-  transform: scale(1.15);
-  box-shadow: 0 8px 25px rgba(72, 187, 120, 0.4);
-}
-
-.action-btn.thumbs-down:hover {
-  box-shadow: 0 8px 25px rgba(245, 101, 101, 0.4);
-}
-
-.action-btn.active {
-  transform: scale(1.1);
-}
-
-.action-btn.active.thumbs-up {
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-  box-shadow: 0 0 20px rgba(72, 187, 120, 0.5);
-}
-
-.action-btn.active.thumbs-down {
-  background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
-  box-shadow: 0 0 20px rgba(245, 101, 101, 0.5);
-}
-
-.action-icon {
-  width: 16px;
-  height: 16px;
-  color: rgba(255, 255, 255, 0.8);
-  transition: all 0.3s;
-  position: relative;
-  z-index: 1;
-}
-
-.action-btn:hover .action-icon {
-  color: white;
-  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.8));
-}
-
-.action-btn.thumbs-up:hover .action-icon {
-  color: white;
-}
-
-.action-btn.thumbs-down:hover .action-icon {
-  color: white;
-}
-
-.chat-input-container {
-  flex: 0 0 auto;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(20px);
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 -8px 25px rgba(0, 0, 0, 0.2);
-}
-
-.input-wrapper {
-  display: flex;
-  align-items: flex-start;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(20px);
-  border-radius: 25px;
-  padding: 12px 12px 12px 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  max-width: 900px;
-  margin: 0 auto;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
-  overflow: hidden;
-}
-
-.input-wrapper::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.15), transparent);
-  transition: left 0.6s;
-}
-
-.input-wrapper:hover::before {
-  left: 100%;
-}
-
-.input-wrapper:focus-within {
-  border-color: #667eea;
-  box-shadow: 0 12px 40px rgba(102, 126, 234, 0.4);
-  transform: translateY(-2px);
-}
-
-.chat-input {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  border-radius: 0;
-  font-size: 1rem;
-  background-color: transparent;
-  color: white;
-  font-family: inherit;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  max-width: 100%;
-  max-height: 150px;
-  min-height: 24px;
-  overflow-y: auto;
-  resize: none;
-  outline: none;
-  line-height: 1.5;
-}
-
-.chat-input::placeholder {
-  color: rgba(255, 255, 255, 0.6);
-  font-style: italic;
-}
-
-.chat-input:focus {
-  outline: none;
-}
-
-.attachment-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  margin-top: 6px;
-  border-radius: 50%;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.attachment-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: scale(1.1) rotate(10deg);
-}
-
-.attachment-icon {
-  width: 20px;
-  height: 20px;
-  color: rgba(255, 255, 255, 0.7);
-  transition: all 0.3s;
-}
-
-.attachment-btn:hover .attachment-icon {
-  color: #667eea;
-  filter: drop-shadow(0 0 8px #667eea);
-}
-
-.send-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border: none;
-  cursor: pointer;
-  margin-left: 8px;
-  color: white;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-  position: relative;
-  overflow: hidden;
-}
-
-.send-btn::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
-  transition: left 0.6s;
-}
-
-.send-btn:hover::before {
-  left: 100%;
-}
-
-.send-btn:hover:not(:disabled) {
-  transform: scale(1.15) rotate(15deg);
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
-  animation: pulse 1s infinite;
-}
-
-.send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-  animation: none;
-}
-
-.send-icon {
-  width: 18px;
-  height: 18px;
-  filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.5));
-}
-
-.loading-spinner {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  border-top-color: white;
-  animation: spin 1s ease-in-out infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* 메시지 전환 효과 수정 */
-.message-list-enter-active,
-.message-list-leave-active {
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  backface-visibility: hidden;
-  transform-style: preserve-3d;
-}
-
-.message-list-enter-from {
-  opacity: 0;
-  transform: translateY(-30px) scale(0.9);
-}
-
-.message-list-leave-to {
-  opacity: 0;
-  transform: translateY(30px) scale(0.9);
-}
-
-/* Handle collapsed sidebar */
-@media (max-width: 768px) {
-  .chat-container {
-    width: 100%;
-  }
-  
-  .chat-messages {
-    padding: 16px 16px 100px;
-  }
-  
-  .message.user .message-content {
-    max-width: 85%;
-  }
-  
-  .message.assistant {
-    gap: 4px;
-  }
-  
-  .message.assistant .message-content {
-    margin-right: 4px;
-    max-width: 75%;
-  }
-  
-  .action-btn {
-    width: 28px;
-    height: 28px;
-  }
-  
-  .action-icon {
-    width: 14px;
-    height: 14px;
-  }
-  
-  .chat-input-container {
-    padding: 16px;
-  }
-}
-
-.app.collapsed-sidebar .chat-container {
-  width: 100%;
-}
-
-/* 스트리밍 커서 애니메이션 추가 */
-.cursor {
-  display: inline-block;
-  animation: typing 1.2s step-end infinite;
-  will-change: opacity;
-  margin-left: 2px;
-  color: rgba(255, 255, 255, 0.8);
-  font-weight: bold;
-}
-
-@keyframes blink {
-  from, to {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
-
-/* 스트리밍 메시지 특별 스타일 */
-.message.streaming {
-  position: relative;
-  contain: content;
-  transition: opacity 0.2s ease-in;
-}
-
-/* Floating particles effect */
-.home::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: 
-    radial-gradient(circle at 20% 80%, rgba(102, 126, 234, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 80% 20%, rgba(118, 75, 162, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 40% 40%, rgba(90, 103, 216, 0.06) 0%, transparent 50%);
-  animation: float 20s ease-in-out infinite;
-  z-index: 0;
-  pointer-events: none;
-}
-
-/* Enhanced transitions for better UX */
-* {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-
-
-/* 랭그래프 스타일 */
-.rangraph-container {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(20px);
-  border-radius: 20px;
-  margin: 20px 0;
-  padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  animation: slideInFromTop 0.6s ease-out;
-  display: flex;
-  flex-direction: column;
-  transition: all 0.3s ease;
-}
-
-.rangraph-container::-webkit-scrollbar {
-  width: 8px;
-}
-
-.rangraph-container::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-}
-
-.rangraph-container::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 4px;
-}
-
-.rangraph-container::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #5a67d8 0%, #667eea 100%);
-}
-
-@keyframes slideInFromTop {
-  from {
-    opacity: 0;
-    transform: translateY(-30px) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.rangraph-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.rangraph-header h2 {
-  margin: 0;
-  font-size: 1.4rem;
-  font-weight: 600;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-
-
-.rangraph-step {
-  margin-bottom: 24px;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: all 0.5s ease;
-  opacity: 0.6;
-  transform: translateY(10px);
-  overflow: visible;
-  min-height: 75px;
-  width: 100%;
-  height: 100% !important;
-}
-
-.rangraph-step.active {
-  opacity: 1;
-  transform: translateY(0);
-  border-color: rgba(102, 126, 234, 0.3);
-  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.2);
-  max-height: none;
-  min-height: auto;
-  overflow: visible;
-}
-
-.step-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  min-width: 0;
-  overflow: visible;
-  width: 100%;
-  flex-wrap: wrap;
-}
-
-.step-number {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  font-size: 1.1rem;
-  flex-shrink: 0;
-}
-
-.step-header h3 {
-  margin: 0;
-  font-size: 1.2rem;
-  font-weight: 500;
-  color: var(--text-color);
-  flex: 1;
-  min-width: 0;
-  overflow: visible;
-  word-wrap: break-word;
-  word-break: break-all;
-  hyphens: auto;
-}
-
-.step-status {
-  opacity: 0;
-  transition: all 0.3s ease;
-}
-
-.rangraph-step.active .step-status {
-  opacity: 1;
-}
-
-.status-icon {
-  width: 24px;
-  height: 24px;
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 0.9rem;
-}
-
-.step-content {
-  color: var(--light-text);
-  animation: fadeInUp 0.6s ease-out;
-  overflow: visible;
-  min-height: 0;
-  height: 100% !important;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.input-section, .augmented-keywords, .search-status, .answer-section, .image-section {
-  margin-bottom: 20px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  position: relative;
-  overflow: hidden;
-  min-height: 60px;
-}
-
-.input-section label, .augmented-keywords label, .search-status label, .answer-section label, .image-section label {
-  display: block;
-  margin-bottom: 12px;
-  font-weight: 600;
-  color: var(--text-color);
-  font-size: 0.9rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.original-input {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 12px 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 0.95rem;
-  color: var(--text-color);
-}
-
-.keywords-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.keyword-tag {
-  background: rgba(255, 255, 255, 0.1);
-  padding: 8px 12px;
-  border-radius: 20px;
-  font-size: 0.85rem;
-  color: var(--text-color);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  transition: all 0.3s ease;
-  animation: fadeInScale 0.5s ease-out;
-}
-
-@keyframes fadeInScale {
-  from {
-    opacity: 0;
-    transform: scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.keyword-tag:hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-}
-
-.keyword-tag.분석 {
-  border-color: rgba(102, 126, 234, 0.5);
-  background: rgba(102, 126, 234, 0.1);
-}
-
-.keyword-tag.지표 {
-  border-color: rgba(72, 187, 120, 0.5);
-  background: rgba(72, 187, 120, 0.1);
-}
-
-.keyword-tag.프로세스 {
-  border-color: rgba(245, 101, 101, 0.5);
-  background: rgba(245, 101, 101, 0.1);
-}
-
-.keyword-tag.장비 {
-  border-color: rgba(237, 137, 54, 0.5);
-  background: rgba(237, 137, 54, 0.1);
-}
-
-.keyword-tag.요인 {
-  border-color: rgba(147, 51, 234, 0.5);
-  background: rgba(147, 51, 234, 0.1);
-}
-
-.keyword-tag.결함 {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.1);
-}
-
-.keyword-tag.액션 {
-  border-color: rgba(16, 185, 129, 0.5);
-  background: rgba(16, 185, 129, 0.1);
-}
-
-.keyword-tag.평가 {
-  border-color: rgba(245, 158, 11, 0.5);
-  background: rgba(245, 158, 11, 0.1);
-}
-
-.no-keywords {
-  color: rgba(255, 255, 255, 0.5);
-  font-style: italic;
-  text-align: center;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-}
-
-.placeholder-text {
-  color: rgba(255, 255, 255, 0.4);
-  font-style: italic;
-  font-size: 0.9rem;
-}
-
-.keyword-tag.제품 {
-  border-color: rgba(139, 92, 246, 0.5);
-  background: rgba(139, 92, 246, 0.1);
-}
-
-.keyword-tag.구조 {
-  border-color: rgba(236, 72, 153, 0.5);
-  background: rgba(236, 72, 153, 0.1);
-}
-
-.keyword-tag.성능 {
-  border-color: rgba(34, 197, 94, 0.5);
-  background: rgba(34, 197, 94, 0.1);
-}
-
-.keyword-tag.재료 {
-  border-color: rgba(59, 130, 246, 0.5);
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.keyword-tag.동작 {
-  border-color: rgba(168, 85, 247, 0.5);
-  background: rgba(168, 85, 247, 0.1);
-}
-
-.keyword-tag.신뢰성 {
-  border-color: rgba(14, 165, 233, 0.5);
-  background: rgba(14, 165, 233, 0.1);
-}
-
-.keyword-tag.품질 {
-  border-color: rgba(251, 146, 60, 0.5);
-  background: rgba(251, 146, 60, 0.1);
-}
-
-.keyword-tag.팀 {
-  border-color: rgba(16, 185, 129, 0.5);
-  background: rgba(16, 185, 129, 0.1);
-}
-
-.keyword-tag.특성 {
-  border-color: rgba(59, 130, 246, 0.5);
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.keyword-category {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  background: rgba(0, 0, 0, 0.8);
-  color: white;
-  font-size: 0.7rem;
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-weight: 500;
-}
-
-.searching-indicator, .generating-indicator {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 50%;
-  border-top-color: #667eea;
-  animation: spin 1s linear infinite;
-}
-
-.loading-container {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: rgba(102, 126, 234, 0.1);
-  border-radius: 12px;
-  border: 1px solid rgba(102, 126, 234, 0.2);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.loading-container span {
-  color: var(--text-color);
-  font-weight: 500;
-  font-size: 0.95rem;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(1.02);
-  }
-}
-
-.search-results {
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.results-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.result-item {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: all 0.3s ease;
-}
-
-.result-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateY(-2px);
-}
-
-.result-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  background: rgba(76, 175, 80, 0.1);
-  border-radius: 8px;
-}
-
-.result-number {
-  font-weight: bold;
-  color: #4caf50;
-  font-size: 14px;
-}
-
-.result-score {
-  font-size: 12px;
-  color: #666;
-  background: rgba(255, 255, 255, 0.8);
-  padding: 4px 8px;
-  border-radius: 12px;
-}
-
-.result-content {
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  border-left: 3px solid #4caf50;
-}
-
-.result-title {
-  font-weight: 600;
-  color: var(--text-color);
-  margin-bottom: 8px;
-  font-size: 1rem;
-}
-
-.result-summary {
-  color: var(--light-text);
-  margin-bottom: 8px;
-  font-size: 0.9rem;
-  line-height: 1.5;
-  font-style: italic;
-}
-
-.result-text {
-  color: var(--light-text);
-  font-size: 0.9rem;
-  line-height: 1.4;
-  max-height: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.final-answer {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-  padding: 20px;
-  border-radius: 16px;
-  border: 1px solid rgba(102, 126, 234, 0.2);
-}
-
-.answer-content {
-  background: rgba(255, 255, 255, 0.05);
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  color: var(--text-color);
-  white-space: pre-line;
-}
-
-.answer-content strong {
-  font-weight: 700;
-  color: #667eea;
-  text-shadow: 0 0 8px rgba(102, 126, 234, 0.3);
-}
-
-
-
-.answer-content br {
-  margin-bottom: 8px;
-}
-
-/* 4단계 이미지 관련 스타일 */
-.image-container {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  text-align: center;
-}
-
-.analysis-result-image {
-  max-width: 100%;
-  height: auto;
-  border-radius: 8px;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-}
-
-.image-caption {
-  color: var(--light-text);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  text-align: left;
-}
-
-.generating-image-indicator {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--light-text);
-  font-size: 1rem;
-}
-
-.generating-image-indicator .spinner {
-  width: 20px;
-  height: 20px;
-  border: 2px solid rgba(102, 126, 234, 0.3);
-  border-top: 2px solid #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-/* 검색 결과 없음 안내 메시지 스타일 */
-.no-search-results {
-  background: linear-gradient(135deg, rgba(255, 193, 7, 0.1) 0%, rgba(255, 152, 0, 0.1) 100%);
-  padding: 24px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 193, 7, 0.3);
-  text-align: center;
-}
-
-.no-results-icon {
-  font-size: 3rem;
-  margin-bottom: 16px;
-  opacity: 0.8;
-}
-
-.no-results-message {
-  color: var(--text-color);
-}
-
-.no-results-message strong {
-  display: block;
-  font-size: 1.2rem;
-  margin-bottom: 12px;
-  color: #ff9800;
-}
-
-.no-results-message p {
-  margin-bottom: 16px;
-  color: var(--light-text);
-  font-size: 0.95rem;
-}
-
-.improvement-suggestions {
-  text-align: left;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.improvement-suggestions strong {
-  color: #ff9800;
-  margin-bottom: 8px;
-  display: block;
-}
-
-.improvement-suggestions ul {
-  margin: 8px 0 0 0;
-  padding-left: 20px;
-  color: var(--light-text);
-}
-
-.improvement-suggestions li {
-  margin-bottom: 6px;
-  font-size: 0.9rem;
-}
-
-/* 이미지 결과 없음 안내 메시지 스타일 */
-.no-image-results {
-  background: linear-gradient(135deg, rgba(156, 39, 176, 0.1) 0%, rgba(233, 30, 99, 0.1) 100%);
-  padding: 24px;
-  border-radius: 16px;
-  border: 1px solid rgba(156, 39, 176, 0.3);
-  text-align: center;
-}
-
-.no-image-icon {
-  font-size: 3rem;
-  margin-bottom: 16px;
-  opacity: 0.8;
-}
-
-.no-image-message {
-  color: var(--text-color);
-}
-
-.no-image-message strong {
-  display: block;
-  font-size: 1.2rem;
-  margin-bottom: 12px;
-  color: #9c27b0;
-}
-
-.no-image-message p {
-  margin-bottom: 16px;
-  color: var(--light-text);
-  font-size: 0.95rem;
-}
-
-.image-info {
-  text-align: left;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.image-info strong {
-  color: #9c27b0;
-  margin-bottom: 8px;
-  display: block;
-}
-
-.image-info ul {
-  margin: 8px 0 0 0;
-  padding-left: 20px;
-  color: var(--light-text);
-}
-
-  .image-info li {
-    margin-bottom: 6px;
-    font-size: 0.9rem;
-  }
-  
-  /* 랭그래프 히스토리 스타일 */
-  .rangraph-history {
-    margin-top: 24px;
-    padding-top: 20px;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-  }
-  
-  .history-header {
-    margin-bottom: 20px;
-    text-align: center;
-  }
-  
-  .history-header h3 {
-    color: var(--text-color);
-    font-size: 1.3rem;
-    margin-bottom: 8px;
-    font-weight: 600;
-  }
-  
-  .history-header p {
-    color: var(--light-text);
-    font-size: 0.9rem;
-    margin: 0;
-  }
-  
-  .history-items {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  
-  .history-item {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
-    padding: 16px;
-    transition: all 0.3s ease;
-  }
-  
-  .history-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.2);
-    transform: translateY(-2px);
-  }
-  
-  .history-header-item {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 12px;
-  }
-  
-  .history-number {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
-  
-  .history-info {
-    flex: 1;
-  }
-  
-  .history-question {
-    color: var(--text-color);
-    font-weight: 600;
-    margin-bottom: 4px;
-    font-size: 0.95rem;
-  }
-  
-  .history-timestamp {
-    color: var(--light-text);
-    font-size: 0.8rem;
-  }
-  
-  .history-delete-btn {
-    background: rgba(255, 59, 48, 0.1);
-    border: 1px solid rgba(255, 59, 48, 0.3);
-    color: #ff3b30;
-    border-radius: 8px;
-    padding: 8px 12px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-size: 1rem;
-  }
-  
-  .history-delete-btn:hover {
-    background: rgba(255, 59, 48, 0.2);
-    border-color: rgba(255, 59, 48, 0.5);
-    transform: scale(1.05);
-  }
-  
-  .history-summary {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  
-  .summary-item {
-    color: var(--light-text);
-    font-size: 0.85rem;
-  }
-  
-  .summary-item strong {
-    color: var(--text-color);
-  }
-  
-  .rangraph-progress {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.progress-bar {
-  width: 100%;
-  height: 8px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 12px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-  border-radius: 4px;
-  transition: width 0.8s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.progress-fill::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
-  animation: shimmer 2s infinite;
-}
-
-.progress-text {
-  text-align: center;
-  color: var(--light-text);
-  font-size: 0.9rem;
-  font-weight: 500;
-}
-
-/* 메시지 저장 상태 스타일 */
-.save-status-container {
-  margin-top: 20px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.saving-indicator {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--light-text);
-  font-size: 0.95rem;
-}
-
-.saving-indicator .spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(102, 126, 234, 0.3);
-  border-top: 2px solid #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.save-status-message {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.95rem;
-  font-weight: 500;
-}
-
-.save-status-message.success {
-  color: #48bb78;
-}
-
-.save-status-message.error {
-  color: #f56565;
-}
-
-.save-status-message .status-icon {
-  font-size: 1.1rem;
-}
-
-/* 모바일 반응형 */
-@media (max-width: 768px) {
-  .rangraph-container {
-    margin: 16px;
-    padding: 20px;
-  }
-  
-  .rangraph-step {
-    padding: 16px;
-  }
-  
-  .keywords-list {
-    gap: 6px;
-  }
-  
-  .keyword-tag {
-    font-size: 0.8rem;
-    padding: 6px 10px;
-  }
-}
+<style>
+@import '../assets/styles/home.css';
 </style> 
