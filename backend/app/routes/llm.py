@@ -15,13 +15,10 @@ from collections import defaultdict
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, SearchRequest, Filter
-import chromadb
-from chromadb.config import Settings
 from app.utils.config import (
     OPENAI_API_KEY, CUSTOM_LLAMA_API_KEY, CUSTOM_LLAMA_API_ENDPOINT, CUSTOM_LLAMA_API_BASE,
     REDIS_HOST, REDIS_PORT, REDIS_CHANNEL,
-    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION,
-    CHROMADB_HOST, CHROMADB_PORT, CHROMADB_COLLECTION
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION
 )
 from app.database import get_db
 from app.models import Conversation, Message
@@ -43,7 +40,6 @@ except Exception as e:
 # 환경 변수 로딩 확인
 print(f"[Config] OpenAI API Key: {'설정됨' if OPENAI_API_KEY else '설정되지 않음'}")
 print(f"[Config] Qdrant: {QDRANT_HOST}:{QDRANT_PORT} (컬렉션: {QDRANT_COLLECTION or '설정되지 않음'})")
-print(f"[Config] ChromaDB: {CHROMADB_HOST}:{CHROMADB_PORT} (컬렉션: {CHROMADB_COLLECTION or '설정되지 않음'})")
 
 # 임베딩 모델 (10차원 벡터 생성)
 class SimpleEmbeddings:
@@ -160,54 +156,7 @@ async def rag_payload_qdrant(question_type: str, limit: int, queries: List[str],
     """Qdrant 페이로드 검색"""
     return await rag_multivector(question_type, limit, queries, query_vectors, ip, port, collection)
 
-async def rag_vector_chromadb(question_type: str, limit: int, queries: List[str], query_vectors: List[List[float]], 
-                             ip: str, port: int, collection: str) -> List[dict]:
-    """ChromaDB 벡터 검색"""
-    try:
-        client = chromadb.HttpClient(host=ip, port=port)
-        
-        # 컬렉션 존재 확인
-        try:
-            col = client.get_collection(collection)
-        except:
-            print(f"컬렉션 {collection}이 존재하지 않습니다.")
-            return []
-        
-        results = []
-        for i, (query, vector) in enumerate(zip(queries, query_vectors)):
-            # 벡터 검색
-            search_result = col.query(
-                query_embeddings=[vector],
-                n_results=limit,
-                include=['metadatas', 'documents']
-            )
-            
-            for j, (doc_id, metadata, document) in enumerate(zip(
-                search_result['ids'][0], 
-                search_result['metadatas'][0], 
-                search_result['documents'][0]
-            )):
-                results.append({
-                    'res_id': doc_id,
-                    'res_score': 1.0,  # 기본 점수
-                    'type_question': question_type,
-                    'type_vector': '',
-                    'res_payload': {
-                        'title': metadata.get('title', ''),
-                        'content': document,
-                        'vector': vector
-                    }
-                })
-        
-        return results
-    except Exception as e:
-        print(f"ChromaDB 검색 오류: {e}")
-        return []
 
-async def rag_payload_chromadb(question_type: str, limit: int, queries: List[str], query_vectors: List[List[float]], 
-                               ip: str, port: int, collection: str) -> List[dict]:
-    """ChromaDB 페이로드 검색"""
-    return await rag_vector_chromadb(question_type, limit, queries, query_vectors, ip, port, collection)
 
 # Available models with added custom Llama models
 AVAILABLE_MODELS = [
@@ -221,10 +170,7 @@ AVAILABLE_MODELS = [
 # 구버전 OpenAI SDK 강제 사용
 USING_NEW_SDK = False
 
-# Model for API key update
-class ApiKeyUpdate(BaseModel):
-    api_key: str
-
+# Custom API key update for Llama models only
 class CustomApiKeyUpdate(BaseModel):
     api_key: str
     api_base: Optional[str] = None
@@ -926,13 +872,6 @@ async def test_vector_db():
         except Exception as e:
             qdrant_status = f"연결 실패: {str(e)}"
         
-        # ChromaDB 연결 테스트
-        chromadb_status = "연결 안됨"
-        try:
-            client = chromadb.HttpClient(host=CHROMADB_HOST, port=CHROMADB_PORT)
-            chromadb_status = "연결됨"
-        except Exception as e:
-            chromadb_status = f"연결 실패: {str(e)}"
         
         return {
             "status": "success",
@@ -941,12 +880,6 @@ async def test_vector_db():
                 "port": QDRANT_PORT,
                 "collection": QDRANT_COLLECTION,
                 "status": qdrant_status
-            },
-            "chromadb": {
-                "host": CHROMADB_HOST,
-                "port": CHROMADB_PORT,
-                "collection": CHROMADB_COLLECTION,
-                "status": chromadb_status
             }
         }
     except Exception as e:
@@ -996,25 +929,14 @@ async def test_langgraph():
     except Exception as e:
         return {"status": "error", "message": f"LangGraph 테스트 실패: {str(e)}"}
 
-@router.post("/set-api-key")
-def set_api_key(key_data: ApiKeyUpdate):
-    """Set the OpenAI API key at runtime"""
-    global OPENAI_API_KEY
-    try:
-        # Set the new API key
-        OPENAI_API_KEY = key_data.api_key
-        
-        # API 키 검증은 실제 요청 시에만 수행
-        return {"status": "success", "message": "API key updated successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid API key: {str(e)}")
+# OpenAI API 키는 config.py에서 고정으로 설정됨 - 런타임 변경 불가
 
 @router.post("/set-custom-api-key")
 def set_custom_api_key(key_data: CustomApiKeyUpdate):
-    """Set the custom LLM API key and endpoints at runtime"""
+    """Set the custom LLM API key and endpoints at runtime (Llama models only)"""
     global CUSTOM_LLAMA_API_KEY, CUSTOM_LLAMA_API_BASE, CUSTOM_LLAMA_API_ENDPOINT
     try:
-        # Set the new API key
+        # Set the new API key for custom Llama models only
         CUSTOM_LLAMA_API_KEY = key_data.api_key
         
         # Optionally update API base and endpoint
@@ -1028,7 +950,7 @@ def set_custom_api_key(key_data: CustomApiKeyUpdate):
         
         return {
             "status": "success", 
-            "message": "Custom API key updated successfully",
+            "message": "Custom API key updated successfully (Llama models only)",
             "api_base": CUSTOM_LLAMA_API_BASE,
             "api_endpoint": CUSTOM_LLAMA_API_ENDPOINT
         }
@@ -1399,16 +1321,85 @@ async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
         print(f"[Chat] 오류 상세: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"일반 LLM 채팅 오류: {str(e)}")
 
-# LangGraph 직접 실행 엔드포인트
+# 질문 유형 판별 함수
+def is_first_question_in_conversation(conversation_id: int, db: Session) -> bool:
+    """대화에서 첫 번째 질문인지 확인"""
+    try:
+        message_count = db.query(Message).filter(Message.conversation_id == conversation_id).count()
+        print(f"[QUESTION_TYPE] 대화 ID {conversation_id}의 메시지 수: {message_count}")
+        return message_count == 0
+    except Exception as e:
+        print(f"[QUESTION_TYPE] 메시지 수 확인 오류: {e}")
+        return True  # 오류 시 첫 번째 질문으로 간주
+
+def get_conversation_context(conversation_id: int, db: Session) -> dict:
+    """대화의 컨텍스트와 히스토리 가져오기"""
+    try:
+        # 해당 대화의 모든 메시지 가져오기 (시간순 정렬)
+        messages = db.query(Message).filter(
+            Message.conversation_id == conversation_id
+        ).order_by(Message.created_at.asc()).all()
+        
+        print(f"[CONTEXT] 대화 ID {conversation_id}의 메시지 {len(messages)}개 로드")
+        
+        # 디버깅을 위한 메시지 상세 정보
+        if len(messages) > 0:
+            print(f"[CONTEXT] 메시지 상세:")
+            for i, msg in enumerate(messages):
+                print(f"[CONTEXT]   {i+1}. ID: {msg.id}, q_mode: {msg.q_mode}, role: {msg.role}, question: {msg.question[:50] if msg.question else 'None'}...")
+        else:
+            print(f"[CONTEXT] ⚠️ 메시지가 없습니다. 대화 ID {conversation_id} 확인 필요")
+        
+        # 첫 번째 질문 찾기 (q_mode가 "search"인 메시지)
+        first_message = None
+        for msg in messages:
+            if msg.q_mode == "search":
+                first_message = msg
+                print(f"[CONTEXT] 첫 번째 질문 발견: 메시지 ID {msg.id}")
+                break
+        
+        # 대화 히스토리 구성
+        conversation_history = []
+        for msg in messages:
+            if msg.question:
+                conversation_history.append({"role": "user", "content": msg.question})
+            if msg.ans:
+                conversation_history.append({"role": "assistant", "content": msg.ans})
+        
+        return {
+            "first_message": first_message,
+            "conversation_history": conversation_history,
+            "message_count": len(messages)
+        }
+        
+    except Exception as e:
+        print(f"[CONTEXT] 대화 컨텍스트 로드 오류: {e}")
+        return {
+            "first_message": None,
+            "conversation_history": [],
+            "message_count": 0
+        }
+
+# LangGraph 직접 실행 엔드포인트 (첫 번째 질문용)
 @router.post("/langgraph")
-async def execute_langgraph(request: StreamRequest):
-    """LangGraph를 직접 실행하여 결과 반환 (랭그래프 전용 API)"""
+async def execute_langgraph(request: StreamRequest, db: Session = Depends(get_db)):
+    """LangGraph를 직접 실행하여 결과 반환 (첫 번째 질문 전용)"""
     try:
         # OpenAI API 키 확인
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
         
         print(f"[LangGraph] 🚀 랭그래프 실행 시작: {request.question}")
+        
+        # 대화 ID가 있는 경우 질문 유형 확인
+        if request.conversation_id:
+            is_first = is_first_question_in_conversation(request.conversation_id, db)
+            if not is_first:
+                print(f"[LangGraph] ⚠️ 추가 질문 감지됨 - LangGraph 실행 차단")
+                raise HTTPException(
+                    status_code=400, 
+                    detail="추가 질문은 /langgraph/followup 엔드포인트를 사용하세요"
+                )
         
         # 워크플로우 확인
         if langgraph_instance is None:
@@ -1452,7 +1443,7 @@ async def execute_langgraph(request: StreamRequest):
             "result": result,
             "tags": tags,
             "db_search_title": db_search_title,
-            "message": "LangGraph 실행 완료"
+            "message": "LangGraph 실행 완료 (첫 번째 질문)"
         }
         
     except Exception as e:
@@ -1460,6 +1451,125 @@ async def execute_langgraph(request: StreamRequest):
         import traceback
         print(f"[LangGraph] 오류 상세: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"LangGraph 실행 오류: {str(e)}")
+
+# 추가 질문 처리 엔드포인트 (RAG 컨텍스트 재사용)
+@router.post("/langgraph/followup")
+async def execute_followup_question(request: StreamRequest, db: Session = Depends(get_db)):
+    """추가 질문 처리 - 기존 RAG 컨텍스트와 대화 히스토리 활용"""
+    try:
+        # OpenAI API 키 확인
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
+        
+        print(f"[FOLLOWUP] 🔄 추가 질문 처리 시작: {request.question}")
+        
+        # 대화 ID 확인
+        if not request.conversation_id:
+            raise HTTPException(status_code=400, detail="추가 질문은 conversation_id가 필요합니다")
+        
+        # 첫 번째 질문 검증 제거 (프론트엔드에서 세션 기반으로 관리)
+        print(f"[FOLLOWUP] 📝 추가 질문 처리 (세션 기반 관리로 인해 백엔드 검증 생략)")
+        
+        # 대화 컨텍스트 가져오기
+        context = get_conversation_context(request.conversation_id, db)
+        
+        if not context["first_message"]:
+            print(f"[FOLLOWUP] ⚠️ 첫 번째 질문 없음 - 기본 컨텍스트로 처리")
+            # 첫 번째 질문이 없어도 일반적인 답변 제공
+            document_title = "일반 대화"
+            document_content = "이전 대화 맥락을 참고하여 답변드리겠습니다."
+        else:
+            # 첫 번째 질문의 키워드와 문서 정보 활용
+            first_message = context["first_message"]
+            
+            # 기본 문서 정보 (실제 RAG 결과가 없으므로 키워드 기반으로 구성)
+            document_title = first_message.db_search_title or "관련 문서"
+            document_content = f"키워드: {first_message.keyword}\n검색 결과: {first_message.db_search_title}\n첫 번째 질문: {first_message.question}\n첫 번째 답변: {first_message.ans[:500] if first_message.ans else '답변 없음'}..."
+        
+        print(f"[FOLLOWUP] 📄 재사용할 RAG 문서:")
+        print(f"[FOLLOWUP] 제목: {document_title}")
+        print(f"[FOLLOWUP] 내용 길이: {len(document_content)} 문자")
+        
+        # 대화 히스토리 구성
+        conversation_history = context["conversation_history"]
+        print(f"[FOLLOWUP] 💬 대화 히스토리: {len(conversation_history)}개 메시지")
+        
+        # 시스템 프롬프트 구성
+        system_prompt = f"""당신은 도움이 되는 AI 어시스턴트입니다. 
+다음 문서를 참고하여 이전 대화의 맥락을 고려해서 답변해주세요.
+
+[참고 문서]
+문서 제목: {document_title}
+문서 내용: {document_content[:1500]}...
+
+위 문서 내용과 이전 대화를 바탕으로 추가 질문에 답변해주세요.
+답변은 다음과 같이 작성해주세요:
+- 한국어로 구어체로 작성
+- 이전 대화의 맥락을 고려하여 자연스럽게 연결
+- 문서 내용을 바탕으로 구체적이고 유용한 답변 제공
+- 답변만 작성하고 추가적인 헤더나 형식은 포함하지 마세요"""
+        
+        # LLM API 호출을 위한 메시지 구성
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # 대화 히스토리 추가 (최근 10개 메시지만)
+        recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+        messages.extend(recent_history)
+        
+        # 현재 질문 추가
+        messages.append({"role": "user", "content": request.question})
+        
+        print(f"[FOLLOWUP] 📤 LLM에 전송할 메시지 수: {len(messages)}")
+        print(f"[FOLLOWUP] 📝 현재 질문: {request.question}")
+        
+        # OpenAI API 호출
+        try:
+            openai.api_key = OPENAI_API_KEY
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=1000,
+                temperature=0.7
+            )
+            
+            answer = response.choices[0].message.content
+            print(f"[FOLLOWUP] ✅ LLM 응답 생성 완료: {len(answer)} 문자")
+            
+        except Exception as e:
+            print(f"[FOLLOWUP] ❌ LLM API 호출 실패: {e}")
+            answer = f"죄송합니다. 추가 질문 처리 중 오류가 발생했습니다: {str(e)}"
+        
+        # 응답 구성 (추가 질문 모드)
+        result = {
+            "res_id": [],
+            "answer": answer,
+            "q_mode": "add",  # 추가 질문 모드
+            "keyword": context["first_message"].keyword if context["first_message"] else None,
+            "db_search_title": context["first_message"].db_search_title if context["first_message"] else None,
+            "conversation_context": {
+                "message_count": context["message_count"],
+                "reused_context": True
+            }
+        }
+        
+        print(f"[FOLLOWUP] 📤 최종 응답 구조:")
+        print(f"[FOLLOWUP] - q_mode: {result['q_mode']}")
+        print(f"[FOLLOWUP] - 답변 길이: {len(result['answer'])} 문자")
+        print(f"[FOLLOWUP] - 재사용된 문서: {document_title}")
+        
+        return {
+            "status": "success",
+            "result": result,
+            "tags": context["first_message"].keyword if context["first_message"] else None,
+            "db_search_title": context["first_message"].db_search_title if context["first_message"] else None,
+            "message": "추가 질문 처리 완료 (컨텍스트 재사용)"
+        }
+        
+    except Exception as e:
+        print(f"[FOLLOWUP] 추가 질문 처리 오류: {str(e)}")
+        import traceback
+        print(f"[FOLLOWUP] 오류 상세: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"추가 질문 처리 오류: {str(e)}")
 
 async def generate_image(prompt: str) -> str:
     """Generate an image using OpenAI DALL-E API"""

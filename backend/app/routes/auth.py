@@ -302,10 +302,11 @@ async def acs(request: Request):
     if request.method == "OPTIONS":
         from fastapi.responses import Response
         response = Response()
-        response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Origin"] = "*"  # 모든 오리진 허용 (개발 환경)
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
         response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Max-Age"] = "3600"
         return response
     
     # POST 요청 처리 (프론트엔드에서 id_token 전송)
@@ -410,11 +411,13 @@ async def acs(request: Request):
                         status_code=200
                     )
                     
-                    # CORS 헤더 설정
-                    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+                    # CORS 헤더 설정 (개발 환경용)
+                    origin = request.headers.get("Origin", "http://localhost:8081")
+                    response.headers["Access-Control-Allow-Origin"] = origin
                     response.headers["Access-Control-Allow-Credentials"] = "true"
-                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+                    response.headers["Access-Control-Expose-Headers"] = "*"
                     
                     # 토큰은 응답 본문에만 포함 (쿠키 제거)
                     # 프론트엔드에서 localStorage에 저장하도록 함
@@ -539,11 +542,13 @@ async def acs(request: Request):
                         status_code=200
                     )
                     
-                    # CORS 헤더 설정
-                    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+                    # CORS 헤더 설정 (개발 환경용)
+                    origin = request.headers.get("Origin", "http://localhost:8081")
+                    response.headers["Access-Control-Allow-Origin"] = origin
                     response.headers["Access-Control-Allow-Credentials"] = "true"
-                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+                    response.headers["Access-Control-Expose-Headers"] = "*"
                     
                     # 토큰을 쿠키에 설정 (프론트엔드 접근을 위해 HttpOnly=False)
                     response.set_cookie(

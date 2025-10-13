@@ -13,9 +13,9 @@ app = FastAPI(title="LLM-mini API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081", "http://127.0.0.1:8081"],  # Allow frontend port
+    allow_origins=["http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:8080"],  # Allow frontend ports
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],  # HEAD 메서드 추가
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],  # 모든 HTTP 메서드 허용
     allow_headers=["*"],  # Allow all headers
     expose_headers=["*"],  # Expose all headers
     max_age=3600,  # CORS preflight 캐시 시간 설정

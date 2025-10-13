@@ -12,6 +12,9 @@ async function processOAuthToken(idToken, state) {
     console.log('[AUTH] processOAuthToken 시작 - oauth_processing 플래그 설정');
     sessionStorage.setItem('oauth_processing', 'true');
     
+    // 처리 시작 시 기존 플래그들 정리
+    sessionStorage.removeItem('sso_processed');
+    
     // 요청 본문 구성
     const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
     
@@ -161,9 +164,22 @@ async function processOAuthToken(idToken, state) {
     // 오류 발생 시 URL에서 OAuth 파라미터 제거
     window.history.replaceState({}, document.title, window.location.pathname);
     
-    // 오류 발생 시 플래그 정리
+    // 오류 발생 시 모든 OAuth 플래그 정리
     sessionStorage.removeItem('oauth_processing');
+    sessionStorage.removeItem('sso_processed');
+    isProcessingOAuth = false;
+    hasProcessedOAuth = false;
+    
     console.error('[AUTH] processOAuthToken 오류:', error);
+    
+    // 오류 발생 시 Google SSO로 리다이렉트
+    setTimeout(() => {
+      try {
+        window.location.replace('http://localhost:8001/api/auth/auth_sh');
+      } catch (redirectError) {
+        console.error('[AUTH] SSO 리다이렉트 실패:', redirectError);
+      }
+    }, 1000);
   }
 }
 
@@ -1241,19 +1257,33 @@ const requireAuth = (to, from, next) => {
     return;
   }
   
-  // OAuth 토큰 처리 중인 경우 잠시 대기
+  // OAuth 토큰 처리 중인 경우 제한된 시간만 대기
   if (isProcessingOAuth) {
-    // OAuth 처리 완료를 기다림 (최대 5초)
+    // OAuth 처리 완료를 기다림 (최대 3초로 단축)
     let waitCount = 0;
-    const maxWait = 50; // 5초 (100ms * 50)
+    const maxWait = 15; // 3초 (200ms * 15)
     
     const checkAuth = () => {
       waitCount++;
       
+      // 처리 완료되었거나 타임아웃된 경우
       if (!isProcessingOAuth || waitCount >= maxWait) {
-        if (store.state.isAuthenticated) {
+        // 타임아웃된 경우 OAuth 플래그 강제 정리
+        if (waitCount >= maxWait) {
+          console.log('[AUTH] OAuth 처리 타임아웃 - 플래그 강제 정리');
+          isProcessingOAuth = false;
+          sessionStorage.removeItem('oauth_processing');
+        }
+        
+        // 인증 상태 확인
+        const storedToken = localStorage.getItem('access_token');
+        const storedUserInfo = localStorage.getItem('user_info');
+        
+        if (storedToken && storedUserInfo && store.state.isAuthenticated) {
+          console.log('[AUTH] 인증 확인됨 - 페이지 접근 허용');
           next();
         } else {
+          console.log('[AUTH] 인증 실패 - Google SSO로 리다이렉트');
           next(false); // 인증 실패 시 페이지 접근 차단
           // Google SSO로 리다이렉트
           setTimeout(() => {
@@ -1263,13 +1293,13 @@ const requireAuth = (to, from, next) => {
               try {
                 window.location.href = 'http://localhost:8001/api/auth/auth_sh';
               } catch (error2) {
-                alert('로그인이 필요합니다. 수동으로 로그인 페이지로 이동해주세요.');
+                console.error('SSO 리다이렉트 실패:', error2);
               }
             }
           }, 100);
         }
       } else {
-        setTimeout(checkAuth, 100);
+        setTimeout(checkAuth, 200); // 대기 간격을 200ms로 증가
       }
     };
     checkAuth();
@@ -1346,10 +1376,10 @@ const requireAuth = (to, from, next) => {
       next();
       return;
     } else {
-      // OAuth 처리 중이지만 아직 토큰이 없는 경우 잠시 대기
+      // OAuth 처리 중이지만 아직 토큰이 없는 경우 제한된 시간만 대기
       console.log('[AUTH] OAuth 처리 중 - 토큰 설정 대기');
       let retryCount = 0;
-      const maxRetries = 10; // 최대 5초 대기 (500ms * 10)
+      const maxRetries = 6; // 최대 3초 대기 (500ms * 6)
       
       const checkAuthState = () => {
         retryCount++;
@@ -1369,8 +1399,23 @@ const requireAuth = (to, from, next) => {
           }
           next();
         } else if (retryCount >= maxRetries) {
-          console.log('[AUTH] 토큰 설정 타임아웃 - 접근 차단');
+          console.log('[AUTH] 토큰 설정 타임아웃 - OAuth 플래그 정리 후 리다이렉트');
+          // 타임아웃 시 OAuth 플래그 정리
+          sessionStorage.removeItem('oauth_processing');
+          sessionStorage.removeItem('sso_processed');
           next(false);
+          // Google SSO로 리다이렉트
+          setTimeout(() => {
+            try {
+              window.location.replace('http://localhost:8001/api/auth/auth_sh');
+            } catch (error) {
+              try {
+                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+              } catch (error2) {
+                console.error('SSO 리다이렉트 실패:', error2);
+              }
+            }
+          }, 100);
         } else {
           setTimeout(checkAuthState, 500);
         }
@@ -1546,6 +1591,7 @@ const checkForAuthToken = () => {
   const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
   if (isLogoutRedirect) {
     console.log('[AUTH] 로그아웃 직후 - OAuth 처리 건너뛰기');
+    sessionStorage.removeItem('logout_redirect'); // 플래그 정리
     return;
   }
   
@@ -1559,6 +1605,12 @@ const checkForAuthToken = () => {
   if (hasProcessedOAuth) {
     console.log('[AUTH] OAuth 이미 처리됨, 중복 실행 방지');
     return;
+  }
+  
+  // 기존 처리 중 플래그가 있는 경우 정리 (새로운 처리 시작)
+  if (sessionStorage.getItem('oauth_processing') === 'true') {
+    console.log('[AUTH] 기존 OAuth 처리 플래그 정리');
+    sessionStorage.removeItem('oauth_processing');
   }
   
   // OAuth 처리 시작 표시
