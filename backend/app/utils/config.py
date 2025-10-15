@@ -1,11 +1,11 @@
 import os
-# from dotenv import load_dotenv  # 주석 처리
+from dotenv import load_dotenv
 
 # Load environment variables
-# load_dotenv()  # 주석 처리
+load_dotenv()
 
 # OpenAI Configuration
-OPENAI_API_KEY = "sk-"  # 실제 OpenAI API 키로 교체하세요  
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  
 CUSTOM_LLAMA_API_KEY = ""
 CUSTOM_LLAMA_API_ENDPOINT = ""
 CUSTOM_LLAMA_API_BASE = ""

@@ -154,10 +154,14 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 }
                 conv_dict["messages"].append(assistant_message)
         
-        # # 디버깅을 위한 로그 추가
-        # print(f"대화 {conversation.id}의 메시지 수: {len(conv_dict['messages'])}")
-        # for i, msg in enumerate(conv_dict['messages']):
-        #     print(f"  메시지 {i+1}: role={msg['role']}, q_mode={msg.get('q_mode')}, question={msg.get('question', '')[:50]}...")
+        # 디버깅을 위한 로그 추가 (LangGraph 정보 확인)
+        langgraph_messages = [msg for msg in conv_dict['messages'] if msg.get('q_mode') in ['search', None] and (msg.get('keyword') or msg.get('db_search_title'))]
+        if langgraph_messages:
+            print(f"[CONVERSATION] 📊 대화 {conversation.id}에 LangGraph 정보 포함:")
+            for i, msg in enumerate(langgraph_messages):
+                print(f"  메시지 {i+1}: role={msg['role']}, q_mode={msg.get('q_mode')}, keyword={bool(msg.get('keyword'))}, db_search_title={bool(msg.get('db_search_title'))}")
+        else:
+            print(f"[CONVERSATION] ⚠️ 대화 {conversation.id}에 LangGraph 정보 없음")
         
         # 요약 정보 추가
         summary_info = get_conversation_summary(conversation, db)
@@ -227,13 +231,15 @@ def create_message(
             assistant_response = f"Sorry, I encountered an error: {str(e)}"
     
     # 디버깅을 위한 로그 추가
-    print(f"[MESSAGE] 메시지 생성 요청 데이터:")
+    print(f"[MESSAGE] 📋 메시지 생성 요청 데이터:")
     print(f"  - question: {message_request.question}")
     print(f"  - q_mode: {message_request.q_mode}")
-    print(f"  - keyword: {message_request.keyword}")
+    print(f"  - keyword 길이: {len(message_request.keyword) if message_request.keyword else 0}자")
+    print(f"  - keyword 미리보기: {message_request.keyword[:200] if message_request.keyword else 'None'}...")
     print(f"  - db_search_title: {message_request.db_search_title}")
     print(f"  - skip_llm: {message_request.skip_llm}")
-    print(f"  - assistant_response: {message_request.assistant_response[:100] if message_request.assistant_response else 'None'}...")
+    print(f"  - assistant_response 길이: {len(message_request.assistant_response) if message_request.assistant_response else 0}자")
+    print(f"  - assistant_response 미리보기: {message_request.assistant_response[:100] if message_request.assistant_response else 'None'}...")
     
     # user_name 검증 및 설정
     user_name = current_user.loginid or current_user.username
@@ -262,6 +268,16 @@ def create_message(
         )
     
     # Create single message with both question and answer
+    print(f"[MESSAGE] 💾 Message 객체 생성 중...")
+    print(f"  - conversation_id: {conversation_id}")
+    print(f"  - role: user")
+    print(f"  - question 길이: {len(message_request.question)}자")
+    print(f"  - ans 길이: {len(assistant_response)}자")
+    print(f"  - user_name: {user_name}")
+    print(f"  - q_mode: {message_request.q_mode}")
+    print(f"  - keyword 존재: {bool(message_request.keyword)}")
+    print(f"  - db_search_title 존재: {bool(message_request.db_search_title)}")
+    
     message = Message(
         conversation_id=conversation_id,
         role="user",
@@ -272,17 +288,141 @@ def create_message(
         keyword=message_request.keyword,  # keyword 추가
         db_search_title=message_request.db_search_title  # db_search_title 추가
     )
+    print(f"[MESSAGE] ✅ Message 객체 생성 완료")
     
-    print(f"[MESSAGE] 새 메시지 저장 중...")
-    db.add(message)
-    db.commit()
-    db.refresh(message)
-    print(f"[MESSAGE] 메시지 저장 완료. ID: {message.id}")
+    print(f"[MESSAGE] 💾 새 메시지 저장 중...")
+    try:
+        db.add(message)
+        print(f"[MESSAGE] 📝 db.add() 완료")
+        
+        db.commit()
+        print(f"[MESSAGE] 💾 db.commit() 완료")
+        
+        db.refresh(message)
+        print(f"[MESSAGE] 🔄 db.refresh() 완료")
+        
+        print(f"[MESSAGE] ✅ 메시지 저장 완료. ID: {message.id}")
+    except Exception as e:
+        print(f"[MESSAGE] ❌ 데이터베이스 저장 오류: {e}")
+        print(f"[MESSAGE] ❌ 오류 타입: {type(e)}")
+        import traceback
+        print(f"[MESSAGE] ❌ 오류 스택: {traceback.format_exc()}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"데이터베이스 저장 오류: {str(e)}")
+    
+    # 저장된 데이터 확인
+    print(f"[MESSAGE] 📊 저장된 메시지 데이터 확인:")
+    print(f"  - ID: {message.id}")
+    print(f"  - conversation_id: {message.conversation_id}")
+    print(f"  - role: {message.role}")
+    print(f"  - question: {message.question[:100]}...")
+    print(f"  - ans 길이: {len(message.ans) if message.ans else 0}자")
+    print(f"  - ans 미리보기: {message.ans[:100] if message.ans else 'None'}...")
+    print(f"  - q_mode: {message.q_mode}")
+    print(f"  - keyword 길이: {len(message.keyword) if message.keyword else 0}자")
+    print(f"  - keyword 미리보기: {message.keyword[:200] if message.keyword else 'None'}...")
+    print(f"  - db_search_title: {message.db_search_title}")
+    print(f"  - user_name: {message.user_name}")
+    print(f"  - created_at: {message.created_at}")
     
     return MessageResponse(
         userMessage=message,
         assistantMessage=message
     )
+
+@router.get("/conversations/{conversation_id}/related")
+def find_related_conversations(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """추가 질문 대화에서 원본 LangGraph 정보가 있는 관련 대화 찾기"""
+    # 현재 대화 확인
+    current_conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id
+    ).first()
+    
+    if not current_conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # 현재 대화의 모든 메시지가 q_mode='add'인지 확인 (추가 질문만 있는 대화)
+    current_messages = current_conversation.messages
+    if not current_messages:
+        return {"related_conversation": None, "message": "No messages in current conversation"}
+    
+    # 현재 대화에 LangGraph 정보가 있는지 먼저 확인
+    has_langgraph_info = any(
+        msg.keyword or msg.db_search_title or msg.q_mode in [None, 'search']
+        for msg in current_messages
+    )
+    
+    if has_langgraph_info:
+        return {"related_conversation": None, "message": "Current conversation already has LangGraph info"}
+    
+    # 모든 메시지가 추가 질문(q_mode='add')인지 확인
+    all_add_messages = all(msg.q_mode == 'add' for msg in current_messages)
+    
+    if not all_add_messages:
+        return {"related_conversation": None, "message": "Current conversation is not an add-only conversation"}
+    
+    # 사용자의 다른 대화들을 시간순으로 검색 (최근 것부터)
+    other_conversations = db.query(Conversation).filter(
+        Conversation.user_id == current_user.id,
+        Conversation.id != conversation_id
+    ).order_by(Conversation.created_at.desc()).all()
+    
+    # 각 대화에서 LangGraph 정보가 있는 메시지 찾기
+    for conversation in other_conversations:
+        for message in conversation.messages:
+            # LangGraph 정보가 있는 메시지 확인
+            if message.keyword or message.db_search_title or message.q_mode in [None, 'search']:
+                # 관련 대화 정보 반환 (메시지 포함)
+                conv_dict = {
+                    "id": conversation.id,
+                    "created_at": conversation.created_at,
+                    "messages": []
+                }
+                
+                # 메시지들을 user/assistant 형태로 변환
+                for msg in conversation.messages:
+                    # User 메시지
+                    user_message = {
+                        "id": msg.id,
+                        "role": "user",
+                        "text": msg.question,
+                        "question": msg.question,
+                        "feedback": msg.feedback,
+                        "created_at": msg.created_at,
+                        "user_name": msg.user_name,
+                        "q_mode": msg.q_mode,
+                        "keyword": msg.keyword,
+                        "db_search_title": msg.db_search_title
+                    }
+                    conv_dict["messages"].append(user_message)
+                    
+                    # Assistant 메시지 (답변이 있는 경우)
+                    if msg.ans:
+                        assistant_message = {
+                            "id": msg.id,
+                            "role": "assistant",
+                            "text": msg.ans,
+                            "ans": msg.ans,
+                            "question": msg.question,
+                            "feedback": msg.feedback,
+                            "created_at": msg.created_at,
+                            "q_mode": msg.q_mode,
+                            "keyword": msg.keyword,
+                            "db_search_title": msg.db_search_title
+                        }
+                        conv_dict["messages"].append(assistant_message)
+                
+                return {
+                    "related_conversation": conv_dict,
+                    "message": f"Found related conversation with LangGraph info: {conversation.id}"
+                }
+    
+    return {"related_conversation": None, "message": "No related conversation with LangGraph info found"}
 
 @router.post("/conversations/{conversation_id}/messages/stream")
 def save_stream_message(

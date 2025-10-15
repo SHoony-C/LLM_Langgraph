@@ -1571,6 +1571,124 @@ async def execute_followup_question(request: StreamRequest, db: Session = Depend
         print(f"[FOLLOWUP] 오류 상세: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"추가 질문 처리 오류: {str(e)}")
 
+# 추가 질문 스트리밍 처리 엔드포인트
+@router.post("/langgraph/followup/stream")
+async def execute_followup_question_stream(request: StreamRequest, db: Session = Depends(get_db)):
+    """추가 질문 스트리밍 처리 - 기존 RAG 컨텍스트와 대화 히스토리 활용"""
+    try:
+        # OpenAI API 키 확인
+        if not OPENAI_API_KEY:
+            return Response(content="Error: OpenAI API 키가 설정되지 않았습니다.", media_type="text/plain")
+        
+        print(f"[FOLLOWUP_STREAM] 🔄 추가 질문 스트리밍 처리 시작: {request.question}")
+        
+        # 대화 ID 확인
+        if not request.conversation_id:
+            return Response(content="Error: 추가 질문은 conversation_id가 필요합니다", media_type="text/plain")
+        
+        # 대화 컨텍스트 가져오기
+        context = get_conversation_context(request.conversation_id, db)
+        
+        if not context["first_message"]:
+            print(f"[FOLLOWUP_STREAM] ⚠️ 첫 번째 질문 없음 - 기본 컨텍스트로 처리")
+            # 첫 번째 질문이 없어도 일반적인 답변 제공
+            document_title = "일반 대화"
+            document_content = "이전 대화 맥락을 참고하여 답변드리겠습니다."
+        else:
+            # 첫 번째 질문의 키워드와 문서 정보 활용
+            first_message = context["first_message"]
+            
+            # 기본 문서 정보 (실제 RAG 결과가 없으므로 키워드 기반으로 구성)
+            document_title = first_message.db_search_title or "관련 문서"
+            document_content = f"키워드: {first_message.keyword}\n검색 결과: {first_message.db_search_title}\n첫 번째 질문: {first_message.question}\n첫 번째 답변: {first_message.ans[:500] if first_message.ans else '답변 없음'}..."
+        
+        print(f"[FOLLOWUP_STREAM] 📄 재사용할 RAG 문서:")
+        print(f"[FOLLOWUP_STREAM] 제목: {document_title}")
+        print(f"[FOLLOWUP_STREAM] 내용 길이: {len(document_content)} 문자")
+        
+        # 대화 히스토리 구성
+        conversation_history = context["conversation_history"]
+        print(f"[FOLLOWUP_STREAM] 💬 대화 히스토리: {len(conversation_history)}개 메시지")
+        
+        # 시스템 프롬프트 구성
+        system_prompt = f"""당신은 도움이 되는 AI 어시스턴트입니다. 
+다음 문서를 참고하여 이전 대화의 맥락을 고려해서 답변해주세요.
+
+[참고 문서]
+문서 제목: {document_title}
+문서 내용: {document_content[:1500]}...
+
+위 문서 내용과 이전 대화를 바탕으로 추가 질문에 답변해주세요.
+답변은 다음과 같이 작성해주세요:
+- 한국어로 구어체로 작성
+- 이전 대화의 맥락을 고려하여 자연스럽게 연결
+- 문서 내용을 바탕으로 구체적이고 유용한 답변 제공
+- 답변만 작성하고 추가적인 헤더나 형식은 포함하지 마세요"""
+        
+        # LLM API 호출을 위한 메시지 구성
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # 대화 히스토리 추가 (최근 10개 메시지만)
+        recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+        messages.extend(recent_history)
+        
+        # 현재 질문 추가
+        messages.append({"role": "user", "content": request.question})
+        
+        print(f"[FOLLOWUP_STREAM] 📤 LLM에 전송할 메시지 수: {len(messages)}")
+        print(f"[FOLLOWUP_STREAM] 📝 현재 질문: {request.question}")
+        
+        # 스트리밍 응답 생성
+        async def followup_stream_generator():
+            try:
+                print(f"[FOLLOWUP_STREAM] OpenAI API 스트림 생성 시작...")
+                # Old SDK style (<1.0) 강제 사용
+                openai.api_key = OPENAI_API_KEY
+                stream = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.7,
+                    stream=True
+                )
+                print(f"[FOLLOWUP_STREAM] OpenAI API 스트림 생성 완료, 스트리밍 시작...")
+                
+                chunk_count = 0
+                for chunk in stream:
+                    chunk_count += 1
+                    if chunk['choices'][0].get('delta', {}).get('content'):
+                        content = chunk['choices'][0]['delta']['content']
+                        yield f"data: {json.dumps({'text': content})}\n\n"
+                    await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
+                
+                print(f"[FOLLOWUP_STREAM] 스트리밍 완료, 총 {chunk_count}개 청크 처리")
+                yield "data: [DONE]\n\n"
+                
+            except Exception as e:
+                print(f"[FOLLOWUP_STREAM] 스트리밍 중 오류: {str(e)}")
+                import traceback
+                print(f"[FOLLOWUP_STREAM] 오류 상세: {traceback.format_exc()}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            followup_stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            }
+        )
+        
+    except Exception as e:
+        print(f"[FOLLOWUP_STREAM] 추가 질문 스트리밍 처리 오류: {str(e)}")
+        import traceback
+        print(f"[FOLLOWUP_STREAM] 오류 상세: {traceback.format_exc()}")
+        return Response(content=f"Error: {str(e)}", media_type="text/plain")
+
 async def generate_image(prompt: str) -> str:
     """Generate an image using OpenAI DALL-E API"""
     try:

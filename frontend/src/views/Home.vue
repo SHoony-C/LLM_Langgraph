@@ -628,20 +628,75 @@ export default {
         const allAddMessages = conversation.messages.every(msg => msg.q_mode === 'add');
         
         if (allAddMessages && conversation.messages.length > 0) {
-          console.log('🔍 추가 질문만 있는 대화입니다. 첫 번째 질문이 다른 대화에 있을 수 있습니다.');
-          console.log('💡 이 대화에서는 LangGraph를 표시하지 않고, 일반 채팅 모드로 동작합니다.');
+          console.log('🔍 추가 질문만 있는 대화입니다. 관련 대화에서 LangGraph 정보를 찾아보겠습니다.');
           
-          // 추가 질문 전용 대화이므로 LangGraph 비활성화
-          this.isFirstQuestionInSession = false; // 추가 질문 모드 유지
+          // 관련 대화 찾기 시도
+          try {
+            await this.findAndRestoreRelatedLangGraph(conversation.id);
+          } catch (error) {
+            console.error('관련 대화 찾기 실패:', error);
+            console.log('💡 관련 대화를 찾을 수 없어 일반 채팅 모드로 동작합니다.');
+            
+            // 추가 질문 전용 대화이므로 LangGraph 비활성화
+            this.isFirstQuestionInSession = false; // 추가 질문 모드 유지
+            this.showRangraph = false;
+            this.currentStep = 0;
+            this.resetRangraph();
+          }
         } else {
           // 일반적인 경우: 첫 번째 질문 상태로 설정
           this.isFirstQuestionInSession = true;
+          
+          // 랭그래프 숨김
+          this.showRangraph = false;
+          this.currentStep = 0;
+          this.resetRangraph();
+        }
+      }
+    },
+    
+    // 관련 대화에서 LangGraph 정보 찾아서 복원
+    async findAndRestoreRelatedLangGraph(conversationId) {
+      console.log('관련 대화 찾기 시작:', conversationId);
+      
+      try {
+        const response = await fetch(`/api/conversations/${conversationId}/related`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${this.$store.state.token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
         
-        // 랭그래프 숨김
-        this.showRangraph = false;
-        this.currentStep = 0;
-        this.resetRangraph();
+        const data = await response.json();
+        console.log('관련 대화 API 응답:', data);
+        
+        if (data.related_conversation) {
+          console.log('✅ 관련 대화를 찾았습니다:', data.related_conversation.id);
+          
+          // 관련 대화의 LangGraph 정보로 복원
+          await this.restoreRangraphFromConversation(data.related_conversation);
+          
+          // 추가 질문 모드로 설정 (LangGraph는 표시하되 추가 질문 가능)
+          this.isFirstQuestionInSession = false;
+          
+          console.log('🎯 관련 대화에서 LangGraph 복원 완료');
+        } else {
+          console.log('❌ 관련 대화를 찾을 수 없습니다:', data.message);
+          
+          // 관련 대화가 없으므로 일반 채팅 모드
+          this.isFirstQuestionInSession = false;
+          this.showRangraph = false;
+          this.currentStep = 0;
+          this.resetRangraph();
+        }
+      } catch (error) {
+        console.error('관련 대화 찾기 API 호출 실패:', error);
+        throw error;
       }
     },
     
@@ -845,15 +900,32 @@ export default {
     
 
     
-    // 추가 질문 처리 메서드 (LangGraph UI 업데이트 없음)
+    // 추가 질문 처리 메서드 (실시간 스트리밍 응답)
     async executeFollowupQuestion(inputText, conversationId) {
       try {
         this.isLoading = true;
         
-        console.log('[FOLLOWUP] 추가 질문 API 호출 시작');
+        console.log('[FOLLOWUP] 추가 질문 실시간 스트리밍 시작');
         
-        // 추가 질문 API 호출
-        const response = await fetch('http://localhost:8001/api/llm/langgraph/followup', {
+        // 먼저 사용자 질문을 즉시 화면에 표시
+        const userMessage = {
+          id: Date.now(),
+          conversation_id: conversationId,
+          role: 'user',
+          question: inputText,
+          ans: null,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 사용자 메시지 즉시 추가
+        this.$store.commit('addMessageToCurrentConversation', userMessage);
+        
+        // 스트리밍 시작
+        this.$store.commit('setIsStreaming', true);
+        this.$store.commit('setStreamingMessage', '');
+        
+        // 추가 질문 스트리밍 API 호출
+        const response = await fetch('http://localhost:8001/api/llm/langgraph/followup/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -865,19 +937,101 @@ export default {
         });
         
         if (!response.ok) {
-          throw new Error(`추가 질문 API 호출 실패 (${response.status}: ${response.statusText})`);
+          throw new Error(`추가 질문 스트리밍 API 호출 실패 (${response.status}: ${response.statusText})`);
         }
         
-        const result = await response.json();
-        console.log('[FOLLOWUP] 추가 질문 API 응답:', result);
+        // 스트리밍 응답 처리
+        console.log('📡 추가 질문 스트리밍 응답 처리 시작...');
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedMessage = '';
         
-        // 추가 질문의 경우 LangGraph UI를 업데이트하지 않음
-        // 바로 메시지 저장
-        await this.saveFollowupMessage(inputText, result, conversationId);
+        let streamingActive = true;
+        let chunkCount = 0;
+        while (streamingActive) {
+          const { value, done } = await reader.read();
+          if (done) {
+            console.log('📡 추가 질문 스트리밍 완료 - done=true');
+            streamingActive = false;
+            break;
+          }
+          
+          chunkCount++;
+          const chunk = decoder.decode(value);
+          console.log(`📡 추가 질문 청크 ${chunkCount} 수신:`, chunk);
+          const lines = chunk.split('\n\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const content = line.substring(6);
+              
+              if (content === '[DONE]') {
+                console.log('📡 추가 질문 [DONE] 신호 수신 - 스트리밍 종료');
+                streamingActive = false;
+                break;
+              }
+              
+              try {
+                // JSON 형태의 데이터인지 확인
+                const jsonData = JSON.parse(content);
+                if (jsonData.text) {
+                  console.log('📡 추가 질문 JSON 데이터 처리:', jsonData.text);
+                  accumulatedMessage += jsonData.text;
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                }
+              } catch (e) {
+                // JSON이 아닌 일반 텍스트인 경우
+                console.log('📡 추가 질문 텍스트 데이터 처리:', content);
+                accumulatedMessage += content;
+                this.$store.commit('updateStreamingMessage', accumulatedMessage);
+              }
+            }
+          }
+        }
+        
+        console.log(`📡 추가 질문 스트리밍 최종 완료 - 총 ${chunkCount}개 청크 처리`);
+        console.log(`📡 추가 질문 누적된 메시지: "${accumulatedMessage}"`);
+        
+        // 스트리밍된 메시지를 assistant 메시지로 현재 대화에 추가
+        const assistantMessage = {
+          id: Date.now() + 1,
+          conversation_id: conversationId,
+          role: 'assistant',
+          question: inputText,
+          ans: accumulatedMessage || '답변을 생성할 수 없습니다.',
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 assistant 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', assistantMessage);
+        
+        // 스트리밍 완료
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 메시지 저장 (q_mode: 'add')
+        console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
+        await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
         
       } catch (error) {
         console.error('[FOLLOWUP] 추가 질문 처리 오류:', error);
-        // 오류 발생 시 기존 방식으로 폴백
+        
+        // 오류 메시지를 assistant 메시지로 추가
+        const errorMessage = {
+          id: Date.now() + 2,
+          conversation_id: conversationId,
+          role: 'assistant',
+          question: inputText,
+          ans: `⚠️ **오류 발생**: ${error.message}`,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 오류 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', errorMessage);
+        
+        // 스트리밍 중단
+        this.$store.commit('setIsStreaming', false);
+        
+        // 폴백으로 기존 방식 시도
         await this.executeSimpleLLMFlow(inputText);
       } finally {
         this.isLoading = false;
@@ -1355,6 +1509,19 @@ export default {
         this.saveRangraphToHistory();
       }
       
+      // 먼저 사용자 질문을 즉시 화면에 표시
+      const userMessage = {
+        id: Date.now(),
+        conversation_id: this.$store.state.currentConversation?.id,
+        role: 'user',
+        question: inputText,
+        ans: null,
+        created_at: new Date().toISOString()
+      };
+      
+      // 현재 대화에 사용자 메시지 즉시 추가
+      this.$store.commit('addMessageToCurrentConversation', userMessage);
+      
       // 실행 상태 설정
       this.isLoading = true;
       this.isSearching = true;
@@ -1468,12 +1635,16 @@ export default {
         };
           
           this.websocket.onmessage = (event) => {
-            console.log('WebSocket 메시지 수신됨:', event.data);
+            console.log('🔔 WebSocket 메시지 수신됨:', event.data);
+            console.log('🔔 메시지 타입:', typeof event.data);
+            console.log('🔔 메시지 길이:', event.data?.length);
             try {
               const data = JSON.parse(event.data);
+              console.log('🔔 파싱된 데이터:', data);
               this.handleWebSocketMessage(data);
             } catch (error) {
-              console.error('WebSocket 메시지 파싱 오류:', error);
+              console.error('❌ WebSocket 메시지 파싱 오류:', error);
+              console.error('❌ 원본 메시지:', event.data);
             }
           };
           
@@ -1576,41 +1747,6 @@ export default {
         });
       } else if (data.node === 'node_rc_rerank' && data.status === 'completed') {
         // 재순위 결과 처리
-      } else if (data.node === 'node_rc_answer' && data.status === 'completed') {
-        console.log('답변 노드 완료 - 데이터:', data.data.result);
-        this.currentStep = 4;
-        this.isGeneratingAnswer = false; // 답변 생성 완료
-        this.finalAnswer = data.data.result.answer;
-        console.log('finalAnswer 설정됨:', this.finalAnswer);
-        
-        // LangGraph 실행 결과에서 필요한 데이터 추출
-        if (data.data.result) {
-          // 키워드 증강 목록 저장
-          if (data.data.result.keyword) {
-            this.extractedKeywords = data.data.result.keyword;
-            console.log('🔑 추출된 키워드:', this.extractedKeywords);
-          }
-          
-          // 검색된 문서 제목들 저장
-          if (data.data.result.db_search_title) {
-            this.extractedDbSearchTitle = data.data.result.db_search_title;
-            console.log('📄 추출된 문서 제목:', this.extractedDbSearchTitle);
-          }
-        }
-        
-        // 이미지가 있으면 표시
-        if (data.data.result.image_url) {
-          this.analysisImage = data.data.result.image_url;
-        }
-        
-        // LangGraph 완료 후 결과 저장 (즉시 실행)
-        console.log('LangGraph 완료, 저장 함수 호출 시작...');
-        // 중복 호출 방지 - 이미 아래에서 호출됨
-        
-        // 강제 리렌더링
-        this.$nextTick(() => {
-          this.$forceUpdate();
-        });
       } else if ((data.node === 'node_rc_answer' || data.node === 'node_rc_plain_answer') && data.status === 'completed') {
         this.isGeneratingAnswer = false; // 답변 생성 완료
         console.log(`${data.node} 노드 완료 - 데이터:`, data.data.result);
@@ -1666,7 +1802,12 @@ export default {
         console.log('  - saveStatus:', this.saveStatus);
         console.log('  - currentConversation:', this.$store.state.currentConversation);
         
-        this.saveLangGraphMessageFromWebSocket();
+        // 저장 함수 호출 (await 사용하여 완료까지 대기)
+        this.saveLangGraphMessageFromWebSocket().then(() => {
+          console.log('✅ LangGraph 저장 완료');
+        }).catch((error) => {
+          console.error('❌ LangGraph 저장 실패:', error);
+        });
         
         // 강제 리렌더링
         this.$nextTick(() => {
@@ -1882,6 +2023,18 @@ export default {
           const messageData = await response.json();
           console.log('✅ WebSocket LangGraph 메시지 저장 완료:', messageData);
           
+          // 저장된 메시지 ID 확인
+          if (messageData.userMessage && messageData.userMessage.id) {
+            console.log('📊 저장된 메시지 ID:', messageData.userMessage.id);
+            console.log('📊 저장된 메시지 데이터:', {
+              question: messageData.userMessage.question,
+              ans: messageData.userMessage.ans?.substring(0, 100) + '...',
+              q_mode: messageData.userMessage.q_mode,
+              keyword: messageData.userMessage.keyword ? '저장됨' : '없음',
+              db_search_title: messageData.userMessage.db_search_title ? '저장됨' : '없음'
+            });
+          }
+          
           // 저장 성공 로그만 남기고 사용자 메시지는 제거
           console.log('✅ LangGraph 분석 결과가 성공적으로 저장되었습니다.');
           this.saveStatus = '';
@@ -1951,13 +2104,22 @@ export default {
           console.log('❌ LangGraph 메시지 저장 실패. 재시도하지 않음.');
         }
       } catch (error) {
-        console.error('WebSocket LangGraph 메시지 저장 중 오류:', error);
+        console.error('❌ WebSocket LangGraph 메시지 저장 중 오류:', error);
+        console.error('❌ 오류 스택:', error.stack);
+        console.error('❌ 저장 시도한 데이터:', {
+          conversationId: this.$store.state.currentConversation?.id,
+          question: this.originalInput,
+          answer: this.finalAnswer?.substring(0, 100) + '...',
+          extractedKeywords: this.extractedKeywords,
+          extractedDbSearchTitle: this.extractedDbSearchTitle
+        });
         this.saveStatus = `⚠️ 메시지 저장 오류: ${error.message}`;
         
         // 오류 발생 시 재시도 로직 제거 - 중복 저장 방지
         console.log('❌ LangGraph 메시지 저장 오류. 재시도하지 않음.');
       } finally {
         this.isSavingMessage = false;
+        console.log('🔄 저장 프로세스 완료, isSavingMessage 초기화');
       }
     },
     
