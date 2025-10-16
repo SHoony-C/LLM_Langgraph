@@ -199,7 +199,7 @@ def delete_conversation(conversation_id: int, db: Session = Depends(get_db), cur
     return {"success": True, "message": f"Conversation {conversation_id} deleted"}
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageResponse)
-def create_message(
+async def create_message(
     conversation_id: int, 
     message_request: MessageRequest, 
     db: Session = Depends(get_db),
@@ -222,7 +222,7 @@ def create_message(
     else:
         # 일반적인 경우 LLM 호출
         try:
-            assistant_response = get_llm_response(message_request.question)
+            assistant_response = await get_llm_response(message_request.question)
         except Exception as e:
             assistant_response = f"Sorry, I encountered an error: {str(e)}"
     

@@ -13,7 +13,7 @@ app = FastAPI(title="LLM-mini API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081", "http://127.0.0.1:8081", "http://localhost:8080"],  # Allow frontend ports
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost:8081"],  # Allow frontend ports
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],  # 모든 HTTP 메서드 허용
     allow_headers=["*"],  # Allow all headers
@@ -26,7 +26,7 @@ app.add_middleware(
 async def options_handler(request: Request, full_path: str):
     """모든 경로에 대한 OPTIONS 요청 처리"""
     response = Response()
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8081"
+    response.headers["Access-Control-Allow-Origin"] = "http://localhost:8080"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     response.headers["Access-Control-Allow-Credentials"] = "true"
@@ -38,6 +38,19 @@ app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 # messages router 제거됨 - conversations에서 처리
 app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
 app.include_router(websocket.router, tags=["websocket"])
+
+# WebSocket Redis 리스너 시작/중지
+@app.on_event("startup")
+async def startup_event():
+    """애플리케이션 시작 시 Redis 리스너 시작"""
+    print("🚀 애플리케이션 시작 - Redis 리스너 초기화 중...")
+    await websocket.start_redis_listener()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """애플리케이션 종료 시 Redis 리스너 중지"""
+    print("🛑 애플리케이션 종료 - Redis 리스너 정리 중...")
+    await websocket.stop_redis_listener()
 
 @app.get("/")
 def read_root():

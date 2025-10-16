@@ -299,7 +299,7 @@ export default {
         const jwtToken = localStorage.getItem('access_token');
         if (jwtToken) {
           try {
-            await fetch('http://localhost:8001/api/auth/logout', {
+            await fetch('http://localhost:8000/api/auth/logout', {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${jwtToken}`,
@@ -325,10 +325,10 @@ export default {
         console.log('[APP] 로그아웃 완료 - SSO 로그인으로 리다이렉트');
         setTimeout(() => {
           try {
-            window.location.replace('http://localhost:8001/api/auth/auth_sh');
+            window.location.replace('http://localhost:8000/api/auth/auth_sh');
           } catch (error) {
             try {
-              window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+              window.location.href = 'http://localhost:8000/api/auth/auth_sh';
             } catch (error2) {
               console.error('SSO 리다이렉트 실패:', error2);
             }
@@ -352,10 +352,10 @@ export default {
         // 에러 발생 시에도 SSO 로그인으로 리다이렉트
         setTimeout(() => {
           try {
-            window.location.replace('http://localhost:8001/api/auth/auth_sh');
+            window.location.replace('http://localhost:8000/api/auth/auth_sh');
           } catch (error) {
             try {
-              window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+              window.location.href = 'http://localhost:8000/api/auth/auth_sh';
             } catch (error2) {
               console.error('SSO 리다이렉트 실패:', error2);
             }
@@ -390,7 +390,7 @@ export default {
           return;
         }
         
-        const response = await fetch('http://localhost:8001/api/auth/me', {
+        const response = await fetch('http://localhost:8000/api/auth/me', {
           headers: { 'Authorization': `Bearer ${jwtToken}` }
         });
         
@@ -660,7 +660,7 @@ export default {
         sessionStorage.setItem('oauth_processing', 'true');
         
         // 백엔드의 /acs 엔드포인트로 리다이렉트하여 처리
-        window.location.href = `http://localhost:8001/api/auth/acs?code=${code}&state=${state}`;
+        window.location.href = `http://localhost:8000/api/auth/acs?code=${code}&state=${state}`;
         return true; // OAuth 처리 진행 중
       }
       
@@ -678,7 +678,7 @@ export default {
       // 백엔드로 토큰 전송
       const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
       
-      fetch('http://localhost:8001/api/auth/acs', {
+      fetch('http://localhost:8000/api/auth/acs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -749,7 +749,7 @@ export default {
       if (code && idToken) {
         const requestBody = `code=${encodeURIComponent(code)}&id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
 
-        fetch('http://localhost:8001/api/auth/acs', {
+        fetch('http://localhost:8000/api/auth/acs', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -909,7 +909,7 @@ export default {
         console.log('[APP] localStorage에서 인증 상태 복원됨');
         
         // 토큰 유효성 검사
-        const response = await fetch('http://localhost:8001/api/auth/me', {
+        const response = await fetch('http://localhost:8000/api/auth/me', {
           headers: { 'Authorization': `Bearer ${jwtToken}` }
         });
         
@@ -949,10 +949,10 @@ export default {
           console.log('[APP] 인증되지 않음 - Google SSO로 리다이렉트');
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8001/api/auth/auth_sh');
+              window.location.replace('http://localhost:8000/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+                window.location.href = 'http://localhost:8000/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }

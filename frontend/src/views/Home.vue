@@ -907,6 +907,22 @@ export default {
         this.isLoading = true;
         
         console.log('[FOLLOWUP] 추가 질문 실시간 스트리밍 시작');
+        console.log('[FOLLOWUP] LangGraph UI 상태 유지:', {
+          showRangraph: this.showRangraph,
+          currentStep: this.currentStep,
+          finalAnswer: this.finalAnswer ? '있음' : '없음'
+        });
+        
+        // LangGraph UI 상태 백업 (추가 질문 중에도 유지)
+        const langGraphBackup = {
+          showRangraph: this.showRangraph,
+          currentStep: this.currentStep,
+          originalInput: this.originalInput,
+          augmentedKeywords: [...(this.augmentedKeywords || [])],
+          searchResults: [...(this.searchResults || [])],
+          finalAnswer: this.finalAnswer,
+          analysisImage: this.analysisImage
+        };
         
         // 먼저 사용자 질문을 즉시 화면에 표시
         const userMessage = {
@@ -921,12 +937,48 @@ export default {
         // 현재 대화에 사용자 메시지 즉시 추가
         this.$store.commit('addMessageToCurrentConversation', userMessage);
         
-        // 스트리밍 시작
+        // 스트리밍 메시지 완전 초기화 (이전 답변 제거)
+        console.log('[FOLLOWUP] 스트리밍 초기화 시작');
+        this.$store.commit('updateStreamingMessage', '');
+        this.$store.commit('setIsStreaming', false);
+        
+        // DOM 업데이트 대기
+        await this.$nextTick();
+        
+        // 스트리밍 상태 확인 및 시작
+        console.log('[FOLLOWUP] 스트리밍 시작 - isStreaming:', this.$store.state.isStreaming);
         this.$store.commit('setIsStreaming', true);
-        this.$store.commit('setStreamingMessage', '');
+        this.$store.commit('updateStreamingMessage', '');
+        
+        // 스트리밍 UI 강제 표시
+        this.streamingVisible = true;
+        
+        // DOM 업데이트 강제 실행
+        await this.$nextTick();
+        this.$forceUpdate();
+        
+        // 스트리밍 상태 재확인
+        console.log('[FOLLOWUP] 스트리밍 상태 설정 완료 - isStreaming:', this.$store.state.isStreaming);
+        console.log('[FOLLOWUP] 스트리밍 UI 표시:', this.streamingVisible);
+        console.log('[FOLLOWUP] 스트리밍 메시지:', this.$store.state.streamingMessage);
+        
+        // LangGraph UI 상태 즉시 복원 (스트리밍 중에도 보이도록)
+        this.showRangraph = langGraphBackup.showRangraph;
+        this.currentStep = langGraphBackup.currentStep;
+        this.originalInput = langGraphBackup.originalInput;
+        this.augmentedKeywords = langGraphBackup.augmentedKeywords;
+        this.searchResults = langGraphBackup.searchResults;
+        this.finalAnswer = langGraphBackup.finalAnswer;
+        this.analysisImage = langGraphBackup.analysisImage;
+        
+        // 강제 UI 업데이트
+        this.$nextTick(() => {
+          this.$forceUpdate();
+          console.log('[FOLLOWUP] LangGraph UI 복원 완료');
+        });
         
         // 추가 질문 스트리밍 API 호출
-        const response = await fetch('http://localhost:8001/api/llm/langgraph/followup/stream', {
+        const response = await fetch('http://localhost:8000/api/llm/langgraph/followup/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -975,15 +1027,26 @@ export default {
               try {
                 // JSON 형태의 데이터인지 확인
                 const jsonData = JSON.parse(content);
-                if (jsonData.text) {
-                  console.log('📡 추가 질문 JSON 데이터 처리:', jsonData.text);
-                  accumulatedMessage += jsonData.text;
+                if (jsonData.content) {
+                  console.log('📡 추가 질문 JSON 데이터 처리:', jsonData.content);
+                  accumulatedMessage += jsonData.content;
+                  // 스트리밍 상태 확인 후 업데이트
+                  console.log('📡 스트리밍 상태 확인 - isStreaming:', this.$store.state.isStreaming);
                   this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                  console.log('📡 스트리밍 메시지 업데이트됨:', accumulatedMessage.length, '문자');
+                } else if (jsonData.text) {
+                  console.log('📡 추가 질문 JSON 데이터 처리 (text):', jsonData.text);
+                  accumulatedMessage += jsonData.text;
+                  // 스트리밍 상태 확인 후 업데이트
+                  console.log('📡 스트리밍 상태 확인 - isStreaming:', this.$store.state.isStreaming);
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                  console.log('📡 스트리밍 메시지 업데이트됨:', accumulatedMessage.length, '문자');
                 }
               } catch (e) {
                 // JSON이 아닌 일반 텍스트인 경우
                 console.log('📡 추가 질문 텍스트 데이터 처리:', content);
                 accumulatedMessage += content;
+                // 안전한 스트리밍 메시지 업데이트
                 this.$store.commit('updateStreamingMessage', accumulatedMessage);
               }
             }
@@ -1012,6 +1075,20 @@ export default {
         // 백엔드에 메시지 저장 (q_mode: 'add')
         console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
         await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
+        
+        // LangGraph UI 상태 최종 복원 (저장 후에도 유지)
+        this.showRangraph = langGraphBackup.showRangraph;
+        this.currentStep = langGraphBackup.currentStep;
+        this.originalInput = langGraphBackup.originalInput;
+        this.augmentedKeywords = langGraphBackup.augmentedKeywords;
+        this.searchResults = langGraphBackup.searchResults;
+        this.finalAnswer = langGraphBackup.finalAnswer;
+        this.analysisImage = langGraphBackup.analysisImage;
+        
+        console.log('[FOLLOWUP] 최종 LangGraph UI 상태 복원 완료');
+        this.$nextTick(() => {
+          this.$forceUpdate();
+        });
         
       } catch (error) {
         console.error('[FOLLOWUP] 추가 질문 처리 오류:', error);
@@ -1044,7 +1121,7 @@ export default {
       try {
         console.log('[FOLLOWUP] 메시지 저장 시작');
         
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1102,6 +1179,17 @@ export default {
       try {
         console.log('💬 일반 LLM 스트리밍 답변 실행 시작:', inputText);
         
+        // LangGraph UI 상태 백업 (폴백 시에도 유지)
+        const langGraphBackup = {
+          showRangraph: this.showRangraph,
+          currentStep: this.currentStep,
+          originalInput: this.originalInput,
+          augmentedKeywords: [...(this.augmentedKeywords || [])],
+          searchResults: [...(this.searchResults || [])],
+          finalAnswer: this.finalAnswer,
+          analysisImage: this.analysisImage
+        };
+        
         // 먼저 사용자 질문을 즉시 화면에 표시
         const userMessage = {
           id: Date.now(),
@@ -1115,12 +1203,25 @@ export default {
         // 현재 대화에 사용자 메시지 추가
         this.$store.commit('addMessageToCurrentConversation', userMessage);
         
-        // 스트리밍 시작
+        // 스트리밍 메시지 완전 초기화 (이전 답변 제거)
+        this.$store.commit('updateStreamingMessage', '');
+        this.$store.commit('setIsStreaming', false); // 먼저 false로 설정
+        
+        // DOM 업데이트 후 스트리밍 시작
+        await this.$nextTick();
+        
+        // 스트리밍 시작 (깨끗한 상태에서)
         this.$store.commit('setIsStreaming', true);
-        this.$store.commit('setStreamingMessage', '');
+        this.$store.commit('updateStreamingMessage', '');
+        
+        // 스트리밍 UI 강제 표시
+        this.streamingVisible = true;
+        
+        console.log('[SIMPLE_LLM] 스트리밍 메시지 초기화 완료');
+        console.log('[SIMPLE_LLM] 스트리밍 UI 표시:', this.streamingVisible);
         
         // 스트리밍 LLM API 호출
-        const response = await fetch('http://localhost:8001/api/llm/chat/stream', {
+        const response = await fetch('http://localhost:8000/api/llm/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1172,8 +1273,12 @@ export default {
               try {
                 // JSON 형태의 데이터인지 확인
                 const jsonData = JSON.parse(content);
-                if (jsonData.text) {
-                  console.log('📡 executeSimpleLLMFlow JSON 데이터 처리:', jsonData.text);
+                if (jsonData.content) {
+                  console.log('📡 executeSimpleLLMFlow JSON 데이터 처리:', jsonData.content);
+                  accumulatedMessage += jsonData.content;
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                } else if (jsonData.text) {
+                  console.log('📡 executeSimpleLLMFlow JSON 데이터 처리 (text):', jsonData.text);
                   accumulatedMessage += jsonData.text;
                   this.$store.commit('updateStreamingMessage', accumulatedMessage);
                 }
@@ -1215,9 +1320,19 @@ export default {
         console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
         await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
         
-        // finalAnswer는 설정하지 않음 (currentMessages에서 표시하므로)
+        // LangGraph UI 상태 복원 (폴백 시에도 유지)
+        this.showRangraph = langGraphBackup.showRangraph;
+        this.currentStep = langGraphBackup.currentStep;
+        this.originalInput = langGraphBackup.originalInput;
+        this.augmentedKeywords = langGraphBackup.augmentedKeywords;
+        this.searchResults = langGraphBackup.searchResults;
+        this.finalAnswer = langGraphBackup.finalAnswer;
+        this.analysisImage = langGraphBackup.analysisImage;
         
-        console.log('💾 일반 LLM 답변 저장 및 표시 완료');
+        console.log('💾 일반 LLM 답변 저장 및 표시 완료 - LangGraph UI 상태 복원');
+        this.$nextTick(() => {
+          this.$forceUpdate();
+        });
         
       } catch (error) {
         console.error('심플 LLM 스트리밍 답변 실행 오류:', error);
@@ -1266,12 +1381,25 @@ export default {
         // 현재 대화에 사용자 메시지 추가
         this.$store.commit('addMessageToCurrentConversation', userMessage);
         
-        // 스트리밍 시작
+        // 스트리밍 메시지 완전 초기화 (이전 답변 제거)
+        this.$store.commit('updateStreamingMessage', '');
+        this.$store.commit('setIsStreaming', false); // 먼저 false로 설정
+        
+        // DOM 업데이트 후 스트리밍 시작
+        await this.$nextTick();
+        
+        // 스트리밍 시작 (깨끗한 상태에서)
         this.$store.commit('setIsStreaming', true);
-        this.$store.commit('setStreamingMessage', '');
+        this.$store.commit('updateStreamingMessage', '');
+        
+        // 스트리밍 UI 강제 표시
+        this.streamingVisible = true;
+        
+        console.log('[ADDITIONAL] 스트리밍 메시지 초기화 완료');
+        console.log('[ADDITIONAL] 스트리밍 UI 표시:', this.streamingVisible);
         
         // 스트리밍 LLM API 호출하여 추가 질문에 답변
-        const response = await fetch('http://localhost:8001/api/llm/chat/stream', {
+        const response = await fetch('http://localhost:8000/api/llm/chat/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1315,7 +1443,10 @@ export default {
               try {
                 // JSON 형태의 데이터인지 확인
                 const jsonData = JSON.parse(content);
-                if (jsonData.text) {
+                if (jsonData.content) {
+                  accumulatedMessage += jsonData.content;
+                  this.$store.commit('updateStreamingMessage', accumulatedMessage);
+                } else if (jsonData.text) {
                   accumulatedMessage += jsonData.text;
                   this.$store.commit('updateStreamingMessage', accumulatedMessage);
                 }
@@ -1401,7 +1532,7 @@ export default {
         
         console.log('📤 추가 질문 메시지 저장 API 요청 데이터:', requestBody);
         
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1421,10 +1552,8 @@ export default {
           // 대화 목록 새로고침 제거 - 이미 화면에 메시지가 표시되어 있으므로
           // await this.$store.dispatch('fetchConversations');
           
-          // 화면에 즉시 반영되도록 강제 업데이트도 제거
-          // this.$nextTick(() => {
-          //   this.$forceUpdate();
-          // });
+          // LangGraph UI 상태는 executeFollowupQuestion에서 관리하므로 여기서는 건드리지 않음
+          console.log('✅ 추가 질문 저장 완료 - LangGraph UI 상태 유지');
         } else if (response.status === 401) {
           // 인증 실패 시 토큰 갱신 시도
           console.error('❌ 인증 실패 (401). 토큰 갱신 시도...');
@@ -1542,18 +1671,20 @@ export default {
       
       try {
         console.log('LangGraph 실행 시작 - WebSocket 연결 시도...');
-        // WebSocket 연결 설정
-        await this.setupWebSocket();
-        console.log('WebSocket 연결 완료 - LangGraph API 호출 시작...');
         
-        // WebSocket 연결 확인
-        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-          console.error('WebSocket 연결 실패');
-          throw new Error('WebSocket 연결을 할 수 없습니다.');
+        // WebSocket 연결 설정 (타임아웃 추가)
+        let websocketConnected = false;
+        try {
+          await this.setupWebSocket();
+          websocketConnected = true;
+          console.log('WebSocket 연결 완료 - LangGraph API 호출 시작...');
+        } catch (wsError) {
+          console.warn('WebSocket 연결 실패, API 응답으로 폴백:', wsError);
+          websocketConnected = false;
         }
         
         // LangGraph API 호출 (랭그래프 전용)
-        const response = await fetch('http://localhost:8001/api/llm/langgraph', {
+        const response = await fetch('http://localhost:8000/api/llm/langgraph', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1570,8 +1701,27 @@ export default {
         const result = await response.json();
         console.log('LangGraph API 응답:', result);
         
-        // WebSocket을 통해 실시간 진행 상황을 받으므로 여기서는 저장하지 않음
-        // 각 노드 완료 시 WebSocket 메시지로 처리됨
+        // WebSocket이 연결되어 있으면 실시간 업데이트 대기, 아니면 직접 처리
+        if (websocketConnected && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+          console.log('WebSocket 연결됨 - 실시간 업데이트 대기 중...');
+          
+          // WebSocket 타임아웃 설정 (30초)
+          const websocketTimeout = setTimeout(() => {
+            console.warn('⚠️ WebSocket 타임아웃 - API 응답으로 폴백');
+            this.processDirectLangGraphResult(result);
+          }, 30000);
+          
+          // WebSocket 메시지 수신 시 타임아웃 취소
+          const originalHandler = this.handleWebSocketMessage;
+          this.handleWebSocketMessage = (data) => {
+            clearTimeout(websocketTimeout);
+            this.handleWebSocketMessage = originalHandler;
+            originalHandler.call(this, data);
+          };
+        } else {
+          console.log('WebSocket 연결 실패 - API 응답으로 직접 처리');
+          await this.processDirectLangGraphResult(result);
+        }
         
       } catch (error) {
         console.error('LangGraph 실행 오류:', error);
@@ -1603,7 +1753,7 @@ export default {
           this.websocket = null;
           
           try {
-            this.websocket = new WebSocket('ws://localhost:8001/ws/node_end');
+            this.websocket = new WebSocket('ws://localhost:8000/ws/node_end');
           } catch (wsError) {
             console.error('WebSocket 생성 실패:', wsError);
             reject(new Error('WebSocket 연결을 생성할 수 없습니다.'));
@@ -1611,11 +1761,11 @@ export default {
           }
           
           this.websocket.onopen = () => {
-            console.log('WebSocket 연결 성공 - localhost:8001/ws/node_end');
+            console.log('🔗 WebSocket 연결 성공 - localhost:8000/ws/node_end');
             if (this.websocket) {
-              console.log('WebSocket 상태:', this.websocket.readyState);
-              console.log('WebSocket URL:', this.websocket.url);
-              console.log('WebSocket 프로토콜:', this.websocket.protocol);
+              console.log('📊 WebSocket 상태:', this.websocket.readyState);
+              console.log('🌐 WebSocket URL:', this.websocket.url);
+              console.log('🔧 WebSocket 프로토콜:', this.websocket.protocol);
             }
           
           // 연결 테스트 메시지 전송
@@ -1625,10 +1775,10 @@ export default {
                 type: 'test',
                 message: 'WebSocket 연결 테스트'
               }));
-              console.log('WebSocket 테스트 메시지 전송됨');
+              console.log('✅ WebSocket 테스트 메시지 전송됨');
             }
           } catch (error) {
-            console.error('WebSocket 테스트 메시지 전송 실패:', error);
+            console.error('❌ WebSocket 테스트 메시지 전송 실패:', error);
           }
           
           resolve(); // 연결 성공 시 Promise 해결
@@ -1638,9 +1788,11 @@ export default {
             console.log('🔔 WebSocket 메시지 수신됨:', event.data);
             console.log('🔔 메시지 타입:', typeof event.data);
             console.log('🔔 메시지 길이:', event.data?.length);
+            console.log('🔔 원본 메시지 전체:', event.data);
             try {
               const data = JSON.parse(event.data);
               console.log('🔔 파싱된 데이터:', data);
+              console.log('🔔 노드:', data.node, '상태:', data.status);
               this.handleWebSocketMessage(data);
             } catch (error) {
               console.error('❌ WebSocket 메시지 파싱 오류:', error);
@@ -1661,14 +1813,14 @@ export default {
             this.websocket = null;
           };
           
-          // 연결 타임아웃 설정
+          // 연결 타임아웃 설정 (3초로 단축)
           setTimeout(() => {
             if (this.websocket && this.websocket.readyState === WebSocket.CONNECTING) {
-              console.error('WebSocket 연결 타임아웃');
+              console.error('WebSocket 연결 타임아웃 (3초)');
               this.websocket.close();
               reject(new Error('WebSocket 연결 타임아웃'));
             }
-          }, 5000);
+          }, 3000);
           
         } catch (error) {
           console.error('WebSocket 연결 실패:', error);
@@ -1687,42 +1839,47 @@ export default {
       console.log('📡 현재 키워드 개수:', this.augmentedKeywords?.length || 0);
       
       if (data.node === 'node_init' && data.status === 'completed') {
+        console.log('🔄 1단계: 초기화 완료');
         this.currentStep = 1;
         this.originalInput = data.data.result;
         this.isSearching = false;
         // 강제 리렌더링
         this.$nextTick(() => {
           this.$forceUpdate();
+          console.log('✅ 1단계 UI 업데이트 완료');
         });
       } else if (data.node === 'node_rc_keyword' && data.status === 'completed') {
+        console.log('🔄 2단계: 키워드 증강 시작');
         console.log('🔑 키워드 노드 완료 - 전체 데이터:', data);
         console.log('🔑 키워드 노드 완료 - result 데이터:', data.data?.result);
         console.log('🔑 키워드 노드 완료 - result 타입:', typeof data.data?.result);
         console.log('🔑 키워드 노드 완료 - result 길이:', data.data?.result?.length);
         
         if (data.data && data.data.result && Array.isArray(data.data.result)) {
-        this.currentStep = 2;
-        this.isSearching = true; // 키워드 생성 완료 후 검색 시작
-        this.augmentedKeywords = data.data.result.map((keyword, index) => ({
-          id: index + 1,
-          text: keyword,
-          category: '키워드'
-        }));
-        
-        // 키워드 추출하여 저장
-        this.extractedKeywords = data.data.result;
+          this.currentStep = 2;
+          this.isSearching = true; // 키워드 생성 완료 후 검색 시작
+          this.augmentedKeywords = data.data.result.map((keyword, index) => ({
+            id: index + 1,
+            text: keyword,
+            category: '키워드'
+          }));
+          
+          // 키워드 추출하여 저장
+          this.extractedKeywords = data.data.result;
           console.log('🔑 extractedKeywords 설정됨:', this.extractedKeywords);
           console.log('🔑 augmentedKeywords 설정됨:', this.augmentedKeywords);
-        
-        // 강제 리렌더링
-        this.$nextTick(() => {
-          this.$forceUpdate();
-        });
+          
+          // 강제 리렌더링
+          this.$nextTick(() => {
+            this.$forceUpdate();
+            console.log('✅ 2단계 UI 업데이트 완료 - 키워드 표시됨');
+          });
         } else {
           console.error('🔑 키워드 데이터 형식 오류:', data);
         }
       } else if (data.node === 'node_rc_rag' && data.status === 'completed') {
-        console.log('RAG 노드 완료 - 데이터:', data.data.result);
+        console.log('🔄 3단계: DB 검색 완료');
+        console.log('📊 RAG 노드 완료 - 데이터:', data.data.result);
         this.currentStep = 3; // 3단계로 이동 (답변 생성)
         this.isSearching = false; // 검색 완료
         this.isGeneratingAnswer = true; // 답변 생성 시작
@@ -1744,15 +1901,17 @@ export default {
         // 강제 리렌더링
         this.$nextTick(() => {
           this.$forceUpdate();
+          console.log('✅ 3단계 UI 업데이트 완료 - 검색 결과 표시됨');
         });
       } else if (data.node === 'node_rc_rerank' && data.status === 'completed') {
         // 재순위 결과 처리
       } else if ((data.node === 'node_rc_answer' || data.node === 'node_rc_plain_answer') && data.status === 'completed') {
+        console.log('🔄 4단계: 최종 답변 생성 완료');
         this.isGeneratingAnswer = false; // 답변 생성 완료
-        console.log(`${data.node} 노드 완료 - 데이터:`, data.data.result);
+        console.log(`📝 ${data.node} 노드 완료 - 데이터:`, data.data.result);
         this.currentStep = 4;
         this.finalAnswer = data.data.result.answer || data.data.result;
-        console.log('finalAnswer 설정됨:', this.finalAnswer);
+        console.log('🎯 finalAnswer 설정됨:', this.finalAnswer);
         
         // LangGraph 실행 결과에서 필요한 데이터 추출
         console.log('🔍 node_rc_answer 완료 - 전체 데이터:', data.data.result);
@@ -1812,6 +1971,7 @@ export default {
         // 강제 리렌더링
         this.$nextTick(() => {
           this.$forceUpdate();
+          console.log('✅ 4단계 UI 업데이트 완료 - 최종 답변 표시됨');
         });
       } else if (data.node === 'node_rc_plain_answer' && data.status === 'streaming') {
         // LLM Streaming 응답 처리
@@ -1839,6 +1999,97 @@ export default {
     },
     
 
+    
+    // 직접 LangGraph 결과 처리 (API 응답에서)
+    async processDirectLangGraphResult(apiResult) {
+      console.log('🔄 processDirectLangGraphResult 시작:', apiResult);
+      
+      try {
+        const result = apiResult.result;
+        
+        // 1단계: 초기화 완료
+        this.currentStep = 1;
+        this.isSearching = false;
+        console.log('✅ 1단계: 초기화 완료');
+        this.$nextTick(() => this.$forceUpdate());
+        await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 지연
+        
+        // 2단계: 키워드 증강 결과 표시
+        if (result.keyword || apiResult.tags) {
+          this.currentStep = 2;
+          this.isSearching = true;
+          const keywords = result.keyword || (apiResult.tags ? apiResult.tags.split(', ') : []);
+          this.augmentedKeywords = keywords.map((keyword, index) => ({
+            id: index + 1,
+            text: keyword.trim(),
+            category: '키워드'
+          }));
+          this.extractedKeywords = keywords;
+          console.log('✅ 2단계: 키워드 설정 완료:', this.augmentedKeywords);
+          this.$nextTick(() => this.$forceUpdate());
+          await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 지연
+        }
+        
+        // 3단계: 검색 결과 표시
+        if (result.candidates_total) {
+          this.currentStep = 3;
+          this.isSearching = false;
+          this.isGeneratingAnswer = true;
+          
+          const searchData = result.candidates_total || [];
+          this.searchResults = searchData.slice(0, 5); // 상위 5개만 표시
+          
+          // 검색된 문서 제목 추출
+          if (searchData.length > 0) {
+            this.extractedDbSearchTitle = searchData.map(item => 
+              item.res_payload?.ppt_title || item.title || '제목 없음'
+            );
+          } else {
+            this.extractedDbSearchTitle = apiResult.db_search_title || '검색 결과 없음';
+          }
+          
+          console.log('✅ 3단계: 검색 결과 설정 완료:', this.searchResults);
+          console.log('📄 문서 제목 설정 완료:', this.extractedDbSearchTitle);
+          this.$nextTick(() => this.$forceUpdate());
+          await new Promise(resolve => setTimeout(resolve, 500)); // 0.5초 지연
+        }
+        
+        // 4단계: 최종 답변 표시
+        if (result.response && (result.response.answer || result.response.final_answer)) {
+          this.currentStep = 4;
+          this.isGeneratingAnswer = false;
+          this.finalAnswer = result.response.answer || result.response.final_answer;
+          
+          // 백엔드 응답에서 추가 데이터 추출
+          if (result.response.keyword) {
+            this.extractedKeywords = result.response.keyword;
+          }
+          if (result.response.db_search_title) {
+            this.extractedDbSearchTitle = result.response.db_search_title;
+          }
+          
+          console.log('✅ 4단계: 최종 답변 설정 완료:', this.finalAnswer);
+          this.$nextTick(() => this.$forceUpdate());
+          
+          // 답변이 완료되면 저장
+          await this.saveLangGraphMessageFromWebSocket();
+        }
+        
+        // 최종 상태 정리
+        this.isLoading = false;
+        this.isSearching = false;
+        this.isGeneratingAnswer = false;
+        
+        console.log('🎯 processDirectLangGraphResult 완료 - 모든 단계 처리됨');
+        
+      } catch (error) {
+        console.error('❌ processDirectLangGraphResult 오류:', error);
+        // 오류 발생 시에도 상태 정리
+        this.isLoading = false;
+        this.isSearching = false;
+        this.isGeneratingAnswer = false;
+      }
+    },
     
     // LangGraph 결과 처리
     async processLangGraphResult(result) {
@@ -1896,7 +2147,7 @@ export default {
         console.log('🔄 토큰 갱신 시작...');
         
         // 현재 토큰으로 갱신 시도
-        const response = await fetch('http://localhost:8001/api/auth/refresh', {
+        const response = await fetch('http://localhost:8000/api/auth/refresh', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1997,7 +2248,7 @@ export default {
         };
         
         console.log('📤 백엔드로 전송할 요청 데이터:', requestBody);
-        console.log('🌐 API 엔드포인트:', `http://localhost:8001/api/conversations/${conversationId}/messages`);
+        console.log('🌐 API 엔드포인트:', `http://localhost:8000/api/conversations/${conversationId}/messages`);
         console.log('🔑 인증 토큰:', this.$store.state.token ? '설정됨' : '설정되지 않음');
         console.log('📊 현재 상태 데이터:');
         console.log('  - extractedKeywords:', this.extractedKeywords);
@@ -2007,7 +2258,7 @@ export default {
         
         // 메시지 생성 API 호출
         console.log('📡 API 호출 시작...');
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -2142,7 +2393,7 @@ export default {
         });
         
         // 메시지 생성 API 호출
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -2192,12 +2443,12 @@ LangGraph API 연결에 실패했습니다.
 **오류 정보**:
 • API 오류: ${error?.message || 'LangGraph API 호출 실패'}
 • API 엔드포인트: /api/llm/langgraph → 404 Not Found
-• WebSocket 연결: ws://localhost:8001/ws/node_end → 연결 실패
+• WebSocket 연결: ws://localhost:8000/ws/node_end → 연결 실패
 
 **해결 방안**:
 • LangGraph 서버가 실행 중인지 확인하세요
 • API 엔드포인트가 올바른지 확인하세요
-• WebSocket 서버가 8001번 포트에서 실행 중인지 확인하세요
+• WebSocket 서버가 8000번 포트에서 실행 중인지 확인하세요
 
 입력하신 "${inputText}"에 대한 분석을 위해서는 LangGraph 서버가 정상적으로 실행되어야 합니다.`;
       
@@ -2215,7 +2466,7 @@ LangGraph API 연결에 실패했습니다.
         const conversationId = this.$store.state.currentConversation.id;
         
         // 메시지 생성 API 호출
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',

@@ -53,38 +53,57 @@ async def broadcast(message: str):
             clients.discard(ws)
 
 async def redis_listener_loop():
-    await pubsub.subscribe(channel_name)
-    print(f"[redis] 🔔 구독 완료: {channel_name}")
     try:
+        print(f"[redis] 🔗 Redis 연결 시도: {redis_client}")
+        await pubsub.subscribe(channel_name)
+        print(f"[redis] 🔔 구독 완료: {channel_name}")
+        
+        # Redis 연결 테스트
+        await redis_client.ping()
+        print(f"[redis] ✅ Redis 서버 연결 확인됨")
+        
         # get_message + sleep 대신 listen()으로 블로킹 루프(폴링 제거)
         async for msg in pubsub.listen():
+            print(f"[redis] 📨 원시 메시지 수신: {msg}")
             if msg.get("type") != "message":
+                print(f"[redis] ⏭️ 메시지 타입 무시: {msg.get('type')}")
                 continue
-            print(f"[redis] ✅ 메시지 수신: {msg['data'][:100]}...")
+            print(f"[redis] ✅ 유효한 메시지 수신: {msg['data'][:100]}...")
             await broadcast(msg["data"])
     except asyncio.CancelledError:
         print(f"[redis] ❌ Redis 리스너 취소됨")
         pass
     except Exception as e:
         print(f"[redis] ❌ Redis 리스너 오류: {e}")
+        import traceback
+        print(f"[redis] 오류 상세: {traceback.format_exc()}")
     finally:
         print(f"[redis] 🔚 Redis 연결 종료 중...")
-        await pubsub.close()
-        await redis_client.close()
+        try:
+            await pubsub.close()
+            await redis_client.close()
+        except Exception as e:
+            print(f"[redis] Redis 연결 종료 중 오류: {e}")
 
-@router.on_event("startup")
-async def startup_event():
+# Startup/Shutdown 이벤트를 main.py에서 처리하도록 변경
+async def start_redis_listener():
+    """Redis 리스너 시작"""
     global _broadcast_task, _started
     if _started:
-        return  # 이미 실행 중이면 재기동 금지
+        print("[Redis] 이미 시작됨 - 중복 기동 방지")
+        return
     _started = True
+    print("[Redis] 🚀 Redis 리스너 시작 중...")
     _broadcast_task = asyncio.create_task(redis_listener_loop())
+    print("[Redis] ✅ Redis 리스너 시작 완료")
 
-@router.on_event("shutdown")
-async def shutdown_event():
+async def stop_redis_listener():
+    """Redis 리스너 중지"""
     global _broadcast_task
     if _broadcast_task:
+        print("[Redis] 🛑 Redis 리스너 중지 중...")
         _broadcast_task.cancel()
         with contextlib.suppress(Exception):
             await _broadcast_task
+        print("[Redis] ✅ Redis 리스너 중지 완료")
 

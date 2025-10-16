@@ -426,7 +426,7 @@ async def acs(request: Request):
                     )
                     
                     # CORS 헤더 설정 (개발 환경용)
-                    origin = request.headers.get("Origin", "http://localhost:8081")
+                    origin = request.headers.get("Origin", "http://localhost:8080")
                     response.headers["Access-Control-Allow-Origin"] = origin
                     response.headers["Access-Control-Allow-Credentials"] = "true"
                     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
@@ -560,7 +560,7 @@ async def acs(request: Request):
                     )
                     
                     # CORS 헤더 설정 (개발 환경용)
-                    origin = request.headers.get("Origin", "http://localhost:8081")
+                    origin = request.headers.get("Origin", "http://localhost:8080")
                     response.headers["Access-Control-Allow-Origin"] = origin
                     response.headers["Access-Control-Allow-Credentials"] = "true"
                     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"

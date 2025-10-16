@@ -19,7 +19,7 @@ async function processOAuthToken(idToken, state) {
     const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
     
     // 백엔드의 acs 엔드포인트로 id_token 전송
-    const response = await fetch('http://localhost:8001/api/auth/acs', {
+    const response = await fetch('http://localhost:8000/api/auth/acs', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -176,7 +176,7 @@ async function processOAuthToken(idToken, state) {
     // 오류 발생 시 Google SSO로 리다이렉트
     setTimeout(() => {
       try {
-        window.location.replace('http://localhost:8001/api/auth/auth_sh');
+        window.location.replace('http://localhost:8000/api/auth/auth_sh');
       } catch (redirectError) {
         console.error('[AUTH] SSO 리다이렉트 실패:', redirectError);
       }
@@ -299,7 +299,7 @@ function initializeAuthFromStorage() {
           });
           
           // 인증 상태 확인을 위한 API 호출
-          fetch('http://localhost:8001/api/auth/me', {
+          fetch('http://localhost:8000/api/auth/me', {
             headers: { 'Authorization': `Bearer ${accessToken}` }
           })
           .then(response => {
@@ -614,7 +614,7 @@ const store = createStore({
     },
     
     async register(context, userData) {
-      const response = await fetch('http://localhost:8001/api/auth/register', {
+      const response = await fetch('http://localhost:8000/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -641,7 +641,7 @@ const store = createStore({
       formData.append('username', username);
       formData.append('password', password);
       
-      const response = await fetch('http://localhost:8001/api/auth/token', {
+      const response = await fetch('http://localhost:8000/api/auth/token', {
         method: 'POST',
         body: formData
       });
@@ -653,7 +653,7 @@ const store = createStore({
       
       const data = await response.json();
       
-      const userResponse = await fetch('http://localhost:8001/api/auth/me', {
+      const userResponse = await fetch('http://localhost:8000/api/auth/me', {
         headers: { 'Authorization': `Bearer ${data.access_token}` }
       });
       
@@ -699,7 +699,7 @@ const store = createStore({
           headers['Authorization'] = `Bearer ${jwtToken}`;
         }
         
-        const response = await fetch('http://localhost:8001/api/conversations', {
+        const response = await fetch('http://localhost:8000/api/conversations', {
           headers,
           credentials: 'include' // 쿠키 포함
         });
@@ -763,7 +763,7 @@ const store = createStore({
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
         
-        const response = await fetch('http://localhost:8001/api/conversations', {
+        const response = await fetch('http://localhost:8000/api/conversations', {
           method: 'POST',
           headers,
           credentials: 'include',
@@ -807,7 +807,7 @@ const store = createStore({
       try {
         if (!state.isAuthenticated) return;
         
-        const response = await fetch(`http://localhost:8001/api/conversations/${conversationId}`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
           method: 'DELETE',
           headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
           credentials: 'include' // 쿠키 포함
@@ -835,7 +835,7 @@ const store = createStore({
           await this.dispatch('createConversation');
         }
         
-        const response = await fetch(`http://localhost:8001/api/conversations/${state.currentConversation.id}/messages`, {
+        const response = await fetch(`http://localhost:8000/api/conversations/${state.currentConversation.id}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -892,7 +892,7 @@ const store = createStore({
         // 백엔드 API 요청 데이터 로깅
         const requestData = { feedback: newFeedback };
         
-        const response = await fetch(`http://localhost:8001/api/messages/${messageId}/feedback`, {
+        const response = await fetch(`http://localhost:8000/api/messages/${messageId}/feedback`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -941,7 +941,7 @@ const store = createStore({
       try {
         commit('setApiKeyError', null);
         
-        const response = await fetch('http://localhost:8001/api/set-api-key', {
+        const response = await fetch('http://localhost:8000/api/set-api-key', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ api_key: apiKey })
@@ -996,7 +996,7 @@ const store = createStore({
         
         // 에러 처리 개선을 위해 try-catch 사용
         try {
-        const response = await fetch('http://localhost:8001/api/stream', {
+        const response = await fetch('http://localhost:8000/api/stream', {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1086,7 +1086,7 @@ const store = createStore({
         
           // 백엔드 저장 시도
           try {
-        const saveResponse = await fetch(`http://localhost:8001/api/conversations/${currentConversationId}/messages/stream`, {
+        const saveResponse = await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/messages/stream`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1164,7 +1164,7 @@ const store = createStore({
     async loginWithToken({ commit, dispatch }, token) {
       try {
         // Set token in store
-        const userResponse = await fetch('http://localhost:8001/api/auth/me', {
+        const userResponse = await fetch('http://localhost:8000/api/auth/me', {
           headers: { 'Authorization': `Bearer ${token}` },
           credentials: 'include' // 쿠키 포함
         });
@@ -1196,7 +1196,7 @@ const store = createStore({
       try {
         commit('setLlamaApiError', null);
         
-        const response = await fetch('http://localhost:8001/api/set-custom-api-key', {
+        const response = await fetch('http://localhost:8000/api/set-custom-api-key', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1294,10 +1294,10 @@ const requireAuth = (to, from, next) => {
           // Google SSO로 리다이렉트
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8001/api/auth/auth_sh');
+              window.location.replace('http://localhost:8000/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+                window.location.href = 'http://localhost:8000/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }
@@ -1413,10 +1413,10 @@ const requireAuth = (to, from, next) => {
           // Google SSO로 리다이렉트
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8001/api/auth/auth_sh');
+              window.location.replace('http://localhost:8000/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+                window.location.href = 'http://localhost:8000/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }
@@ -1439,10 +1439,10 @@ const requireAuth = (to, from, next) => {
   // Google SSO로 리다이렉트
   setTimeout(() => {
     try {
-      window.location.replace('http://localhost:8001/api/auth/auth_sh');
+      window.location.replace('http://localhost:8000/api/auth/auth_sh');
     } catch (error) {
       try {
-        window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+        window.location.href = 'http://localhost:8000/api/auth/auth_sh';
       } catch (error2) {
         alert('로그인이 필요합니다. 수동으로 로그인 페이지로 이동해주세요.');
       }
@@ -1496,7 +1496,7 @@ const router = createRouter({
               };
               
               // 백엔드에서 인증 토큰 발급 받기
-              fetch('http://localhost:8001/api/auth/token', {
+              fetch('http://localhost:8000/api/auth/token', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json'

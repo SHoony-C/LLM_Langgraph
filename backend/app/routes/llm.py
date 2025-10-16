@@ -177,7 +177,7 @@ class SearchState(dict):
 async def publish_node_status(node_name: str, status: str, data: dict):
     """Redis를 통해 노드 상태를 발행"""
     if redis_client is None:
-        print(f"[Redis] Redis 클라이언트가 초기화되지 않음 - {node_name}: {status}")
+        print(f"[Redis] ❌ Redis 클라이언트가 초기화되지 않음 - {node_name}: {status}")
         return
         
     try:
@@ -187,10 +187,16 @@ async def publish_node_status(node_name: str, status: str, data: dict):
             "data": data,
             "timestamp": asyncio.get_event_loop().time()
         }
-        await redis_client.publish(REDIS_CHANNEL, json.dumps(message))
-        print(f"[Redis] Published {node_name}: {status}")
+        message_json = json.dumps(message)
+        print(f"[Redis] 📤 발행 시도: {node_name}:{status} → 채널: {REDIS_CHANNEL}")
+        print(f"[Redis] 📄 메시지 내용: {message_json[:200]}...")
+        
+        result = await redis_client.publish(REDIS_CHANNEL, message_json)
+        print(f"[Redis] ✅ 발행 완료: {node_name}:{status} (구독자 {result}명)")
     except Exception as e:
-        print(f"[Redis] Error publishing status: {e}")
+        print(f"[Redis] ❌ 발행 실패: {node_name}:{status} - 오류: {e}")
+        import traceback
+        print(f"[Redis] 오류 상세: {traceback.format_exc()}")
         # Redis 오류가 발생해도 워크플로우는 계속 진행
         pass
 
@@ -755,6 +761,54 @@ try:
 except Exception as e:
     print(f"[LangGraph] 워크플로우 생성 실패: {e}")
     langgraph_instance = None
+
+# 간단한 LLM 응답 함수 (conversations.py에서 사용)
+async def get_llm_response(question: str) -> str:
+    """간단한 LLM 응답 생성 함수"""
+    try:
+        if not OPENAI_API_KEY:
+            return "OpenAI API 키가 설정되지 않았습니다."
+        
+        print(f"[LLM_RESPONSE] 질문: {question}")
+        
+        messages = [
+            {"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다."},
+            {"role": "user", "content": question}
+        ]
+        
+        # httpx 클라이언트 설정
+        httpx_client = httpx.AsyncClient(verify=False, timeout=None)
+        
+        # AsyncOpenAI 클라이언트 생성
+        client = AsyncOpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url="https://api.openai.com/v1",
+            http_client=httpx_client,
+            default_headers={
+                "x-dep-ticket": OPENAI_API_KEY,
+                "Send-System-Name": "ds2llm",
+                "User-Id": "conversation_api",
+                "User-Type": "AD_ID",
+                "Prompt-Msg-Id": str(uuid.uuid4()),
+                "Completion-Msg-Id": str(uuid.uuid4()),
+            }
+        )
+        
+        # 비동기 호출
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.7
+        )
+        
+        answer = response.choices[0].message.content
+        print(f"[LLM_RESPONSE] 응답 생성 완료: {len(answer)}자")
+        return answer
+        
+    except Exception as e:
+        print(f"[LLM_RESPONSE] 오류: {str(e)}")
+        return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
 
 
 
