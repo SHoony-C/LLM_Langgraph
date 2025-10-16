@@ -7,6 +7,7 @@ from fastapi import Form
 class UserBase(BaseModel):
     username: str
     mail: EmailStr
+    deptname: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -37,6 +38,7 @@ class UserMap(BaseModel):
     username: Optional[str] = None  # name 필드로 매핑
     mail: Optional[str] = None  # email 필드로 매핑
     loginid: Optional[str] = None  # sub 필드로 매핑
+    deptname: Optional[str] = None  # department name 필드로 매핑
     picture: Optional[str] = None  # 프로필 이미지 URL
     
     # Google OAuth 추가 필드 - 사용하지 않지만 검증을 통과하기 위해 선언

@@ -1,22 +1,19 @@
 import openai
+from openai import AsyncOpenAI
 import asyncio
 import json
-import base64
-import random
-import requests
-from fastapi import APIRouter, HTTPException, Response, Depends
+import httpx
+import uuid
+from fastapi import APIRouter, HTTPException, Response, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, AsyncGenerator
+from typing import List, Optional, Dict, Any
 import redis.asyncio as aioredis
-from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph
 from collections import defaultdict
-import numpy as np
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, SearchRequest, Filter
 from app.utils.config import (
-    OPENAI_API_KEY, CUSTOM_LLAMA_API_KEY, CUSTOM_LLAMA_API_ENDPOINT, CUSTOM_LLAMA_API_BASE,
+    OPENAI_API_KEY,
     REDIS_HOST, REDIS_PORT, REDIS_CHANNEL,
     QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION
 )
@@ -158,27 +155,6 @@ async def rag_payload_qdrant(question_type: str, limit: int, queries: List[str],
 
 
 
-# Available models with added custom Llama models
-AVAILABLE_MODELS = [
-    {"name": "GPT-3.5 Turbo", "value": "gpt-3.5-turbo"},
-    {"name": "GPT-4", "value": "gpt-4"},
-    {"name": "Claude 3 Opus", "value": "claude-3-opus"},
-    {"name": "Claude 3 Sonnet", "value": "claude-3-sonnet"},
-    {"name": "Llama 4 Maverick", "value": "llama-4-maverick"}
-]
-
-# 구버전 OpenAI SDK 강제 사용
-USING_NEW_SDK = False
-
-# Custom API key update for Llama models only
-class CustomApiKeyUpdate(BaseModel):
-    api_key: str
-    api_base: Optional[str] = None
-    api_endpoint: Optional[str] = None
-
-class Model(BaseModel):
-    name: str
-    value: str
 
 # 스트리밍 요청을 위한 클래스
 class StreamRequest(BaseModel):
@@ -257,15 +233,34 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             }
         
         try:
-            # LLM을 사용하여 키워드 증강
-            # 구버전 OpenAI 라이브러리 사용
-            openai.api_key = OPENAI_API_KEY
-            response = openai.ChatCompletion.create(
+            # LLM을 사용하여 키워드 증강 - 새로운 LLM 방식
+            messages = [
+                {"role": "system", "content": "당신은 전문적인 키워드 분석가입니다. 주어진 질문을 분석하여 관련된 전문 키워드들을 생성해주세요. 각 키워드는 쉼표로 구분하고, 최대 15개까지 생성하세요."},
+                {"role": "user", "content": f"다음 질문에 대한 관련 키워드들을 생성해주세요: {question}"}
+            ]
+            
+            # httpx 클라이언트 설정
+            httpx_client = httpx.AsyncClient(verify=False, timeout=None)
+            
+            # AsyncOpenAI 클라이언트 생성
+            client = AsyncOpenAI(
+                api_key=OPENAI_API_KEY,
+                base_url="https://api.openai.com/v1",
+                http_client=httpx_client,
+                default_headers={
+                    "x-dep-ticket": OPENAI_API_KEY,
+                    "Send-System-Name": "ds2llm",
+                    "User-Id": "langgraph_keyword",
+                    "User-Type": "AD_ID",
+                    "Prompt-Msg-Id": str(uuid.uuid4()),
+                    "Completion-Msg-Id": str(uuid.uuid4()),
+                }
+            )
+            
+            # 비동기 호출
+            response = await client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 전문적인 키워드 분석가입니다. 주어진 질문을 분석하여 관련된 전문 키워드들을 생성해주세요. 각 키워드는 쉼표로 구분하고, 최대 15개까지 생성하세요."},
-                    {"role": "user", "content": f"다음 질문에 대한 관련 키워드들을 생성해주세요: {question}"}
-                ],
+                messages=messages,
                 max_tokens=200,
                 temperature=0.7
             )
@@ -497,26 +492,45 @@ async def node_rc_answer(state: SearchState) -> SearchState:
             print(f"[Answer] {prompt}")
             print(f"[Answer] 📊 프롬프트 길이: {len(prompt)} 문자")
             
-            # OpenAI API 호출하여 답변 생성
+            # OpenAI API 호출하여 답변 생성 - 새로운 LLM 방식
             llm_answer = ""
             try:
                 if OPENAI_API_KEY:
-                    print(f"[Answer] 🚀 OpenAI API 호출 시작...")
-                    openai.api_key = OPENAI_API_KEY
-                    response = openai.ChatCompletion.create(
+                    print(f"[Answer] 🚀 LLM API 호출 시작...")
+                    
+                    messages = [{"role": "user", "content": prompt}]
+                    
+                    # httpx 클라이언트 설정
+                    httpx_client = httpx.AsyncClient(verify=False, timeout=None)
+                    
+                    # AsyncOpenAI 클라이언트 생성
+                    client = AsyncOpenAI(
+                        api_key=OPENAI_API_KEY,
+                        base_url="https://api.openai.com/v1",
+                        http_client=httpx_client,
+                        default_headers={
+                            "x-dep-ticket": OPENAI_API_KEY,
+                            "Send-System-Name": "ds2llm",
+                            "User-Id": "langgraph_answer",
+                            "User-Type": "AD_ID",
+                            "Prompt-Msg-Id": str(uuid.uuid4()),
+                            "Completion-Msg-Id": str(uuid.uuid4()),
+                        }
+                    )
+                    
+                    # 비동기 호출
+                    response = await client.chat.completions.create(
                         model="gpt-3.5-turbo",
-                        messages=[
-                            {"role": "user", "content": prompt}
-                        ],
+                        messages=messages,
                         max_tokens=1000,
                         temperature=0.7
                     )
-                    raw_llm_answer = response['choices'][0]['message']['content']
-                    print(f"[Answer] ✅ OpenAI 응답 생성 완료")
-                    print(f"[Answer] 📥 OpenAI 원시 응답:")
+                    raw_llm_answer = response.choices[0].message.content
+                    print(f"[Answer] ✅ LLM 응답 생성 완료")
+                    print(f"[Answer] 📥 LLM 원시 응답:")
                     print(f"[Answer] {raw_llm_answer}")
                     print(f"[Answer] 📊 응답 길이: {len(raw_llm_answer)} 문자")
-                    print(f"[Answer] 사용된 토큰: {response['usage']['total_tokens'] if response.get('usage') else 'N/A'}")
+                    print(f"[Answer] 사용된 토큰: {response.usage.total_tokens if response.usage else 'N/A'}")
                     
                     # LLM에서 받은 깔끔한 답변을 바로 사용
                     llm_answer = raw_llm_answer.strip()
@@ -531,7 +545,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
 더 자세한 분석을 위해서는 OpenAI API 키가 필요합니다."""
                     
             except Exception as e:
-                print(f"[Answer] ❌ OpenAI API 호출 실패: {e}")
+                print(f"[Answer] ❌ LLM API 호출 실패: {e}")
                 import traceback
                 print(f"[Answer] 오류 상세: {traceback.format_exc()}")
                 # API 호출 실패 시 기본 답변 생성
@@ -702,99 +716,6 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
         import traceback
         print(f"[DB_SAVE] 오류 상세: {traceback.format_exc()}")
 
-async def generate_detailed_analysis(question: str, top_result: dict) -> str:
-    """상위 검색 결과에 대해 LLM을 사용하여 상세 분석 생성"""
-    try:
-        # 검색 결과 정보 추출
-        doc_title = top_result.get('res_payload', {}).get('ppt_title', '제목 없음')
-        doc_summary = top_result.get('res_payload', {}).get('ppt_summary', '요약 없음')
-        doc_content = top_result.get('res_payload', {}).get('ppt_content', '내용 없음')
-        doc_score = top_result.get('res_score', 0)
-        
-        # LLM 프롬프트 구성
-        prompt = f"""다음 문서를 기반으로 사용자의 질문에 대해 상세하고 유용한 답변을 제공해주세요.
-
-**사용자 질문**: {question}
-
-**검색된 문서 정보**:
-- 제목: {doc_title}
-- 요약: {doc_summary}
-- 내용: {doc_content}
-- 유사도 점수: {doc_score:.4f}
-
-**답변 요구사항**:
-1. 문서 내용을 바탕으로 질문에 직접적으로 답변
-2. 구체적인 정보와 예시 포함
-3. 실무에 적용 가능한 인사이트 제공
-4. 추가 질문이나 고려사항 제시
-
-**답변 형식**:
-- 핵심 요약 (2-3줄)
-- 상세 분석 (5-7줄)
-- 실무 적용 방안 (2-3줄)
-- 추가 고려사항 (1-2줄)
-
-문서 내용을 충실히 반영하여 답변해주세요."""
-
-        # OpenAI API 호출
-        if OPENAI_API_KEY:
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 전문적인 비즈니스 분석가입니다. 문서 내용을 바탕으로 명확하고 실용적인 답변을 제공합니다."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=800,
-                temperature=0.7
-            )
-            
-            detailed_answer = response.choices[0].message.content
-            print(f"[LLM] 상세 분석 생성 완료: {len(detailed_answer)}자")
-            return detailed_answer
-        else:
-            # OpenAI API 키가 없는 경우 기본 답변 생성
-            basic_answer = f"""🔍 **분석 결과 요약**
-
-**입력 질문**: {question}
-
-**검색된 문서**: {doc_title}
-**유사도 점수**: {doc_score:.4f}
-
-**문서 요약**: {doc_summary}
-
-**상세 내용**: {doc_content}
-
-**핵심 인사이트**:
-- 이 문서는 {doc_title}에 대한 정보를 제공합니다
-- {doc_summary}와 관련된 내용을 담고 있습니다
-- {doc_content}에 대한 구체적인 정보를 포함하고 있습니다
-
-**실무 적용 방안**:
-- 문서의 내용을 바탕으로 {question}에 대한 해결책을 모색할 수 있습니다
-- {doc_title} 영역에서의 모범 사례를 참고할 수 있습니다
-
-**추가 고려사항**:
-- 더 구체적인 정보가 필요하다면 추가 질문을 해주세요
-- 관련된 다른 문서나 자료도 함께 검토하는 것을 권장합니다"""
-            
-            print(f"[LLM] 기본 답변 생성 완료: {len(basic_answer)}자")
-            return basic_answer
-            
-    except Exception as e:
-        print(f"[LLM] 상세 분석 생성 중 오류: {str(e)}")
-        # 오류 발생 시 기본 답변 반환
-        return f"""🔍 **분석 결과 요약**
-
-**입력 질문**: {question}
-
-**검색된 문서**: {top_result.get('res_payload', {}).get('ppt_title', '제목 없음')}
-**유사도 점수**: {top_result.get('res_score', 0):.4f}
-
-**문서 내용**: {top_result.get('res_payload', {}).get('ppt_content', '내용을 불러올 수 없습니다')}
-
-**상세 분석**: 
-문서 내용을 바탕으로 한 상세 분석을 생성하는 중 오류가 발생했습니다. 
-기본 정보는 위와 같으며, 추가 질문을 통해 더 구체적인 답변을 받으실 수 있습니다."""
 
 # LangGraph 구성
 def create_langgraph():
@@ -835,281 +756,19 @@ except Exception as e:
     print(f"[LangGraph] 워크플로우 생성 실패: {e}")
     langgraph_instance = None
 
-@router.get("/models", response_model=List[Model])
-def get_models():
-    """Get list of available models"""
-    return AVAILABLE_MODELS
 
-@router.get("/test-embeddings")
-async def test_embeddings():
-    """임베딩 모델 테스트"""
-    try:
-        if not OPENAI_API_KEY:
-            return {"status": "error", "message": "OpenAI API 키가 설정되지 않았습니다."}
-        
-        embeddings = SimpleEmbeddings()
-        test_texts = ["테스트 텍스트"]
-        vectors = embeddings.embed_documents(test_texts)
-        
-        return {
-            "status": "success", 
-            "message": "임베딩 모델 테스트 성공",
-            "vector_dimension": len(vectors[0]) if vectors else 0
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"임베딩 모델 테스트 실패: {str(e)}"}
 
-@router.get("/test-vector-db")
-async def test_vector_db():
-    """벡터 데이터베이스 연결 테스트"""
-    try:
-        # Qdrant 연결 테스트
-        qdrant_status = "연결 안됨"
-        try:
-            client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-            collections = client.get_collections()
-            qdrant_status = f"연결됨 (컬렉션 수: {len(collections.collections)})"
-        except Exception as e:
-            qdrant_status = f"연결 실패: {str(e)}"
-        
-        
-        return {
-            "status": "success",
-            "qdrant": {
-                "host": QDRANT_HOST,
-                "port": QDRANT_PORT,
-                "collection": QDRANT_COLLECTION,
-                "status": qdrant_status
-            }
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"벡터 DB 테스트 실패: {str(e)}"}
-
-@router.get("/test-langgraph")
-async def test_langgraph():
-    """LangGraph 워크플로우 테스트"""
-    try:
-        # 워크플로우 상태 확인
-        workflow_info = {
-            "nodes": ["node_rc_init", "node_rc_keyword", "node_rc_rag", "node_rc_rerank", "node_rc_answer", "node_rc_plain_answer"],
-            "entry_point": "node_rc_init",
-            "end_points": ["END"]
-        }
-        
-        # 워크플로우 확인
-        if langgraph_instance is None:
-            return {
-                "status": "error",
-                "workflow_info": workflow_info,
-                "workflow_status": "워크플로우가 초기화되지 않음",
-                "result_summary": {}
-            }
-        
-        # 간단한 테스트 실행
-        test_state = {"question": "테스트 질문"}
-        try:
-            result = await langgraph_instance.ainvoke(test_state)
-            workflow_status = "실행 성공"
-            result_summary = {
-                "question": result.get("question", ""),
-                "keyword_count": len(result.get("keyword", [])) if isinstance(result.get("keyword"), list) else 1,
-                "candidates_count": len(result.get("candidates_total", [])),
-                "response_count": len(result.get("response", []))
-            }
-        except Exception as e:
-            workflow_status = f"실행 실패: {str(e)}"
-            result_summary = {}
-        
-        return {
-            "status": "success",
-            "workflow_info": workflow_info,
-            "workflow_status": workflow_status,
-            "result_summary": result_summary
-        }
-    except Exception as e:
-        return {"status": "error", "message": f"LangGraph 테스트 실패: {str(e)}"}
-
-# OpenAI API 키는 config.py에서 고정으로 설정됨 - 런타임 변경 불가
-
-@router.post("/set-custom-api-key")
-def set_custom_api_key(key_data: CustomApiKeyUpdate):
-    """Set the custom LLM API key and endpoints at runtime (Llama models only)"""
-    global CUSTOM_LLAMA_API_KEY, CUSTOM_LLAMA_API_BASE, CUSTOM_LLAMA_API_ENDPOINT
-    try:
-        # Set the new API key for custom Llama models only
-        CUSTOM_LLAMA_API_KEY = key_data.api_key
-        
-        # Optionally update API base and endpoint
-        if key_data.api_base:
-            CUSTOM_LLAMA_API_BASE = key_data.api_base
-        if key_data.api_endpoint:
-            CUSTOM_LLAMA_API_ENDPOINT = key_data.api_endpoint
-        
-        # We don't test the API key here as it might require special headers
-        # that we don't know about in advance
-        
-        return {
-            "status": "success", 
-            "message": "Custom API key updated successfully (Llama models only)",
-            "api_base": CUSTOM_LLAMA_API_BASE,
-            "api_endpoint": CUSTOM_LLAMA_API_ENDPOINT
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error setting custom API key: {str(e)}")
-
-def get_llm_response(prompt: str) -> str:
-    """Get a response from the selected LLM model"""
-    model = "gpt-3.5-turbo"  # 기본 모델 설정
-    
-    # Check if API key is set
-    if model.startswith("gpt") and not OPENAI_API_KEY:
-        return "Error: OpenAI API key not set. Please set your API key in the settings."
-    
-    # Handle different model providers
-    if model.startswith("gpt"):
-        return get_openai_response(prompt, model)
-    elif model.startswith("claude"):
-        # Claude API 통합이 필요합니다
-        return f"Error: Claude API integration not implemented yet. Model: {model}"
-    elif model.startswith("llama"):
-        return get_custom_llama_response(prompt, model)
-    else:
-        return f"Unknown model: {model}. Please select a supported model."
-
-def get_custom_llama_response(prompt: str, model: str = "llama-4-maverick") -> str:
-    """Get a response from custom Llama API"""
-    try:
-        # Construct the full API URL
-        api_url = f"{CUSTOM_LLAMA_API_BASE}{CUSTOM_LLAMA_API_ENDPOINT}"
-        
-        # Prepare the headers
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {CUSTOM_LLAMA_API_KEY}"
-        }
-        
-        # Prepare the request body
-        # Note: Adjust this format according to your API's requirements
-        data = {
-            "prompt": prompt,
-            "max_tokens": 500,
-            "temperature": 0.7,
-            "model": model,  # This might need adjustment based on your API
-            "stream": False
-        }
-        
-        # Make the API call
-        response = requests.post(api_url, headers=headers, json=data, timeout=60)
-        
-        # Check for successful response
-        if response.status_code == 200:
-            result = response.json()
-            # Extract the generated text (adjust key names based on your API response structure)
-            if "choices" in result and len(result["choices"]) > 0:
-                return result["choices"][0].get("text", "No response text found")
-            return "No valid response from Llama API"
-        else:
-            return f"Error from Llama API: HTTP {response.status_code}"
-            
-    except Exception as e:
-        print(f"Error calling Llama API: {str(e)}")
-        return f"Error: {str(e)}"
-
-def get_openai_response(prompt: str, model: str = "gpt-3.5-turbo") -> str:
-    """Get a response from OpenAI API"""
-    try:
-        if USING_NEW_SDK:
-            # New SDK style (>1.0)
-            try:
-                client = OpenAI(api_key=OPENAI_API_KEY)
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                print(f"New SDK error: {e}, trying old SDK...")
-                # New SDK 실패 시 old SDK 시도
-                openai.api_key = OPENAI_API_KEY
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000
-                )
-                return response.choices[0].message.content
-        else:
-            # Old SDK style (<1.0)
-            openai.api_key = OPENAI_API_KEY
-            response = openai.ChatCompletion.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000
-            )
-            return response.choices[0].message.content
-    except Exception as e:
-        print(f"Error calling OpenAI API: {str(e)}")
-        return f"Error: {str(e)}"
-
-# 스트리밍 응답을 위한 새로운 엔드포인트
-@router.post("/stream")
-async def stream_response(request: StreamRequest):
-    """Stream a response from the LLM model using LangGraph"""
-    try:
-        # 워크플로우 확인
-        if langgraph_instance is None:
-            return Response(content="Error: LangGraph 워크플로우가 초기화되지 않았습니다.", media_type="text/plain")
-        
-        # LangGraph 실행
-        initial_state = {"question": request.question}
-        
-        # 비동기로 LangGraph 실행
-        result = await langgraph_instance.ainvoke(initial_state)
-        
-        # 스트리밍 응답 생성
-        async def stream_generator():
-            # 각 노드의 진행 상황을 스트리밍
-            yield f"data: {json.dumps({'type': 'start', 'message': 'LangGraph 실행 시작'})}\n\n"
-            
-            # 최종 결과 스트리밍
-            if 'response' in result and 'answer' in result['response']:
-                answer = result['response']['answer']
-                # 답변을 단어 단위로 스트리밍
-                words = answer.split()
-                for word in words:
-                    yield f"data: {word} \n\n"
-                    await asyncio.sleep(0.1)  # 자연스러운 타이핑 효과
-            
-            yield "data: [DONE]\n\n"
-        
-        return StreamingResponse(
-            stream_generator(),
-            media_type="text/event-stream"
-        )
-        
-    except Exception as e:
-        print(f"Error in LangGraph streaming: {str(e)}")
-        return Response(content=f"Error: {str(e)}", media_type="text/plain")
 
 # 일반 LLM 채팅 엔드포인트 (streaming 지원)
 @router.post("/chat/stream")
-async def stream_chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
-    """Stream a response from general LLM chat (without LangGraph)"""
+async def stream_chat_with_llm(request: StreamRequest, http_request: Request, db: Session = Depends(get_db)):
+    """Stream a response from general LLM chat using async method"""
     try:
         # OpenAI API 키 확인
         if not OPENAI_API_KEY:
             return Response(content="Error: OpenAI API 키가 설정되지 않았습니다.", media_type="text/plain")
         
-        print(f"[Chat Stream] ========== 일반 LLM 스트리밍 채팅 시작 ==========")
+        print(f"[Chat Stream] ========== LLM 스트리밍 채팅 시작 ==========")
         print(f"[Chat Stream] 요청 정보:")
         print(f"[Chat Stream] - 질문: {request.question}")
         print(f"[Chat Stream] - 대화 ID: {request.conversation_id}")
@@ -1156,43 +815,9 @@ async def stream_chat_with_llm(request: StreamRequest, db: Session = Depends(get
         
         print(f"[Chat Stream] ========== 전체 메시지 내용 끝 ==========")
         
-        # 스트리밍 응답 생성
-        async def stream_generator():
-            try:
-                print(f"[Chat Stream] OpenAI API 스트림 생성 시작...")
-                # Old SDK style (<1.0) 강제 사용
-                openai.api_key = OPENAI_API_KEY
-                stream = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    max_tokens=1000,
-                    temperature=0.7,
-                    stream=True
-                )
-                print(f"[Chat Stream] OpenAI API 스트림 생성 완료, 스트리밍 시작...")
-                
-                chunk_count = 0
-                for chunk in stream:
-                    chunk_count += 1
-                    # print(f"[Chat Stream] 청크 {chunk_count} 수신: {chunk}")
-                    if chunk['choices'][0].get('delta', {}).get('content'):
-                        content = chunk['choices'][0]['delta']['content']
-                        # print(f"[Chat Stream] 청크 {chunk_count} 내용: '{content}'")
-                        yield f"data: {content}\n\n"
-                    await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
-                
-                # print(f"[Chat Stream] 스트리밍 완료, 총 {chunk_count}개 청크 처리")
-                yield "data: [DONE]\n\n"
-                
-            except Exception as e:
-                print(f"[Chat Stream] 스트리밍 중 오류: {str(e)}")
-                import traceback
-                print(f"[Chat Stream] 오류 상세: {traceback.format_exc()}")
-                yield f"data: Error: {str(e)}\n\n"
-                yield "data: [DONE]\n\n"
-        
+        # 새로운 GPT-3.5-turbo 스트리밍 방식 사용
         return StreamingResponse(
-            stream_generator(),
+            get_streaming_response_async(messages, http_request, request.generate_image or False),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -1204,122 +829,12 @@ async def stream_chat_with_llm(request: StreamRequest, db: Session = Depends(get
         )
         
     except Exception as e:
-        print(f"[Chat Stream] 일반 LLM 스트리밍 채팅 오류: {str(e)}")
+        print(f"[Chat Stream] LLM 스트리밍 채팅 오류: {str(e)}")
         import traceback
         print(f"[Chat Stream] 오류 상세: {traceback.format_exc()}")
         return Response(content=f"Error: {str(e)}", media_type="text/plain")
 
-# 스트리밍 테스트 엔드포인트
-@router.get("/chat/stream/test")
-async def test_streaming():
-    """스트리밍 기능 테스트"""
-    async def test_stream_generator():
-        try:
-            print("[Test Stream] 테스트 스트리밍 시작")
-            for i in range(5):
-                message = f"테스트 메시지 {i+1}"
-                print(f"[Test Stream] 전송: {message}")
-                yield f"data: {message}\n\n"
-                await asyncio.sleep(1)  # 1초 간격으로 전송
-            
-            print("[Test Stream] 테스트 스트리밍 완료")
-            yield "data: [DONE]\n\n"
-        except Exception as e:
-            print(f"[Test Stream] 오류: {str(e)}")
-            yield f"data: Error: {str(e)}\n\n"
-            yield "data: [DONE]\n\n"
-    
-    return StreamingResponse(
-        test_stream_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        }
-    )
 
-# 기존 비-스트리밍 채팅 엔드포인트 (하위 호환성을 위해 유지)
-@router.post("/chat")
-async def chat_with_llm(request: StreamRequest, db: Session = Depends(get_db)):
-    """일반 LLM을 사용한 채팅 응답 (랭그래프 없이)"""
-    try:
-        # OpenAI API 키 확인
-        if not OPENAI_API_KEY:
-            raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
-        
-        print(f"[Chat] ========== 일반 LLM 채팅 시작 (비-스트리밍) ==========")
-        print(f"[Chat] 요청 정보:")
-        print(f"[Chat] - 질문: {request.question}")
-        print(f"[Chat] - 대화 ID: {request.conversation_id}")
-        print(f"[Chat] - conversation_id 타입: {type(request.conversation_id)}")
-        print(f"[Chat] - conversation_id가 None인가?: {request.conversation_id is None}")
-        
-        # 대화 히스토리 구성
-        messages = [{"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."}]
-        
-        if request.conversation_id:
-            try:
-                # 해당 대화의 이전 메시지들 가져오기 (최근 10개만)
-                conversation_messages = db.query(Message).filter(
-                    Message.conversation_id == request.conversation_id
-                ).order_by(Message.created_at.asc()).limit(10).all()
-                
-                print(f"[Chat] 이전 대화 메시지 {len(conversation_messages)}개 로드")
-                print(f"[Chat] ========== 이전 대화 히스토리 상세 정보 ==========")
-                
-                # 이전 대화를 messages에 추가
-                for i, msg in enumerate(conversation_messages):
-                    print(f"[Chat] DB 메시지 {i+1}: ID={msg.id}, role={msg.role}, created_at={msg.created_at}")
-                    if msg.question:
-                        print(f"[Chat] 질문: {msg.question}")
-                        messages.append({"role": "user", "content": msg.question})
-                    if msg.ans:
-                        print(f"[Chat] 답변: {msg.ans}")
-                        messages.append({"role": "assistant", "content": msg.ans})
-                    print(f"[Chat] ----------------------------------------")
-                
-                print(f"[Chat] ========== 이전 대화 히스토리 로드 완료 ==========")
-                        
-            except Exception as e:
-                print(f"[Chat] 대화 히스토리 로드 실패: {e}")
-                # 히스토리 로드 실패해도 계속 진행
-        
-        # 현재 질문 추가
-        messages.append({"role": "user", "content": request.question})
-        
-        print(f"[Chat] 전송할 메시지 개수: {len(messages)}")
-        print(f"[Chat] ========== OpenAI API에 전송할 전체 메시지 내용 ==========")
-        for i, msg in enumerate(messages):
-            print(f"[Chat] 메시지 {i+1}/{len(messages)}: role={msg['role']}")
-            print(f"[Chat] 내용: {msg['content']}")
-            print(f"[Chat] ----------------------------------------")
-        print(f"[Chat] ========== 전체 메시지 내용 끝 ==========")
-        
-        # OpenAI API 호출 (구버전 사용)
-        openai.api_key = OPENAI_API_KEY
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        answer = response.choices[0].message.content
-        print(f"[Chat] ✅ 구버전 OpenAI 응답 생성 완료")
-        
-        return {
-            "status": "success",
-            "response": answer,
-            "message": "일반 LLM 채팅 완료"
-        }
-        
-    except Exception as e:
-        print(f"[Chat] 일반 LLM 채팅 오류: {str(e)}")
-        import traceback
-        print(f"[Chat] 오류 상세: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"일반 LLM 채팅 오류: {str(e)}")
 
 # 질문 유형 판별 함수
 def is_first_question_in_conversation(conversation_id: int, db: Session) -> bool:
@@ -1452,135 +967,17 @@ async def execute_langgraph(request: StreamRequest, db: Session = Depends(get_db
         print(f"[LangGraph] 오류 상세: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"LangGraph 실행 오류: {str(e)}")
 
-# 추가 질문 처리 엔드포인트 (RAG 컨텍스트 재사용)
-@router.post("/langgraph/followup")
-async def execute_followup_question(request: StreamRequest, db: Session = Depends(get_db)):
-    """추가 질문 처리 - 기존 RAG 컨텍스트와 대화 히스토리 활용"""
-    try:
-        # OpenAI API 키 확인
-        if not OPENAI_API_KEY:
-            raise HTTPException(status_code=400, detail="OpenAI API 키가 설정되지 않았습니다.")
-        
-        print(f"[FOLLOWUP] 🔄 추가 질문 처리 시작: {request.question}")
-        
-        # 대화 ID 확인
-        if not request.conversation_id:
-            raise HTTPException(status_code=400, detail="추가 질문은 conversation_id가 필요합니다")
-        
-        # 첫 번째 질문 검증 제거 (프론트엔드에서 세션 기반으로 관리)
-        print(f"[FOLLOWUP] 📝 추가 질문 처리 (세션 기반 관리로 인해 백엔드 검증 생략)")
-        
-        # 대화 컨텍스트 가져오기
-        context = get_conversation_context(request.conversation_id, db)
-        
-        if not context["first_message"]:
-            print(f"[FOLLOWUP] ⚠️ 첫 번째 질문 없음 - 기본 컨텍스트로 처리")
-            # 첫 번째 질문이 없어도 일반적인 답변 제공
-            document_title = "일반 대화"
-            document_content = "이전 대화 맥락을 참고하여 답변드리겠습니다."
-        else:
-            # 첫 번째 질문의 키워드와 문서 정보 활용
-            first_message = context["first_message"]
-            
-            # 기본 문서 정보 (실제 RAG 결과가 없으므로 키워드 기반으로 구성)
-            document_title = first_message.db_search_title or "관련 문서"
-            document_content = f"키워드: {first_message.keyword}\n검색 결과: {first_message.db_search_title}\n첫 번째 질문: {first_message.question}\n첫 번째 답변: {first_message.ans[:500] if first_message.ans else '답변 없음'}..."
-        
-        print(f"[FOLLOWUP] 📄 재사용할 RAG 문서:")
-        print(f"[FOLLOWUP] 제목: {document_title}")
-        print(f"[FOLLOWUP] 내용 길이: {len(document_content)} 문자")
-        
-        # 대화 히스토리 구성
-        conversation_history = context["conversation_history"]
-        print(f"[FOLLOWUP] 💬 대화 히스토리: {len(conversation_history)}개 메시지")
-        
-        # 시스템 프롬프트 구성
-        system_prompt = f"""당신은 도움이 되는 AI 어시스턴트입니다. 
-다음 문서를 참고하여 이전 대화의 맥락을 고려해서 답변해주세요.
-
-[참고 문서]
-문서 제목: {document_title}
-문서 내용: {document_content[:1500]}...
-
-위 문서 내용과 이전 대화를 바탕으로 추가 질문에 답변해주세요.
-답변은 다음과 같이 작성해주세요:
-- 한국어로 구어체로 작성
-- 이전 대화의 맥락을 고려하여 자연스럽게 연결
-- 문서 내용을 바탕으로 구체적이고 유용한 답변 제공
-- 답변만 작성하고 추가적인 헤더나 형식은 포함하지 마세요"""
-        
-        # LLM API 호출을 위한 메시지 구성
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # 대화 히스토리 추가 (최근 10개 메시지만)
-        recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
-        messages.extend(recent_history)
-        
-        # 현재 질문 추가
-        messages.append({"role": "user", "content": request.question})
-        
-        print(f"[FOLLOWUP] 📤 LLM에 전송할 메시지 수: {len(messages)}")
-        print(f"[FOLLOWUP] 📝 현재 질문: {request.question}")
-        
-        # OpenAI API 호출
-        try:
-            openai.api_key = OPENAI_API_KEY
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.7
-            )
-            
-            answer = response.choices[0].message.content
-            print(f"[FOLLOWUP] ✅ LLM 응답 생성 완료: {len(answer)} 문자")
-            
-        except Exception as e:
-            print(f"[FOLLOWUP] ❌ LLM API 호출 실패: {e}")
-            answer = f"죄송합니다. 추가 질문 처리 중 오류가 발생했습니다: {str(e)}"
-        
-        # 응답 구성 (추가 질문 모드)
-        result = {
-            "res_id": [],
-            "answer": answer,
-            "q_mode": "add",  # 추가 질문 모드
-            "keyword": context["first_message"].keyword if context["first_message"] else None,
-            "db_search_title": context["first_message"].db_search_title if context["first_message"] else None,
-            "conversation_context": {
-                "message_count": context["message_count"],
-                "reused_context": True
-            }
-        }
-        
-        print(f"[FOLLOWUP] 📤 최종 응답 구조:")
-        print(f"[FOLLOWUP] - q_mode: {result['q_mode']}")
-        print(f"[FOLLOWUP] - 답변 길이: {len(result['answer'])} 문자")
-        print(f"[FOLLOWUP] - 재사용된 문서: {document_title}")
-        
-        return {
-            "status": "success",
-            "result": result,
-            "tags": context["first_message"].keyword if context["first_message"] else None,
-            "db_search_title": context["first_message"].db_search_title if context["first_message"] else None,
-            "message": "추가 질문 처리 완료 (컨텍스트 재사용)"
-        }
-        
-    except Exception as e:
-        print(f"[FOLLOWUP] 추가 질문 처리 오류: {str(e)}")
-        import traceback
-        print(f"[FOLLOWUP] 오류 상세: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"추가 질문 처리 오류: {str(e)}")
 
 # 추가 질문 스트리밍 처리 엔드포인트
 @router.post("/langgraph/followup/stream")
-async def execute_followup_question_stream(request: StreamRequest, db: Session = Depends(get_db)):
+async def execute_followup_question_stream(request: StreamRequest, http_request: Request, db: Session = Depends(get_db)):
     """추가 질문 스트리밍 처리 - 기존 RAG 컨텍스트와 대화 히스토리 활용"""
     try:
         # OpenAI API 키 확인
         if not OPENAI_API_KEY:
             return Response(content="Error: OpenAI API 키가 설정되지 않았습니다.", media_type="text/plain")
         
-        print(f"[FOLLOWUP_STREAM] 🔄 추가 질문 스트리밍 처리 시작: {request.question}")
+        print(f"[FOLLOWUP_STREAM] 🔄 LLM 추가 질문 스트리밍 처리 시작: {request.question}")
         
         # 대화 ID 확인
         if not request.conversation_id:
@@ -1638,41 +1035,9 @@ async def execute_followup_question_stream(request: StreamRequest, db: Session =
         print(f"[FOLLOWUP_STREAM] 📤 LLM에 전송할 메시지 수: {len(messages)}")
         print(f"[FOLLOWUP_STREAM] 📝 현재 질문: {request.question}")
         
-        # 스트리밍 응답 생성
-        async def followup_stream_generator():
-            try:
-                print(f"[FOLLOWUP_STREAM] OpenAI API 스트림 생성 시작...")
-                # Old SDK style (<1.0) 강제 사용
-                openai.api_key = OPENAI_API_KEY
-                stream = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    max_tokens=1000,
-                    temperature=0.7,
-                    stream=True
-                )
-                print(f"[FOLLOWUP_STREAM] OpenAI API 스트림 생성 완료, 스트리밍 시작...")
-                
-                chunk_count = 0
-                for chunk in stream:
-                    chunk_count += 1
-                    if chunk['choices'][0].get('delta', {}).get('content'):
-                        content = chunk['choices'][0]['delta']['content']
-                        yield f"data: {json.dumps({'text': content})}\n\n"
-                    await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
-                
-                print(f"[FOLLOWUP_STREAM] 스트리밍 완료, 총 {chunk_count}개 청크 처리")
-                yield "data: [DONE]\n\n"
-                
-            except Exception as e:
-                print(f"[FOLLOWUP_STREAM] 스트리밍 중 오류: {str(e)}")
-                import traceback
-                print(f"[FOLLOWUP_STREAM] 오류 상세: {traceback.format_exc()}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                yield "data: [DONE]\n\n"
-        
+        # 새로운 GPT-3.5-turbo 스트리밍 방식 사용
         return StreamingResponse(
-            followup_stream_generator(),
+            get_streaming_response_async(messages, http_request, request.generate_image or False),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -1684,7 +1049,7 @@ async def execute_followup_question_stream(request: StreamRequest, db: Session =
         )
         
     except Exception as e:
-        print(f"[FOLLOWUP_STREAM] 추가 질문 스트리밍 처리 오류: {str(e)}")
+        print(f"[FOLLOWUP_STREAM] LLM 추가 질문 스트리밍 처리 오류: {str(e)}")
         import traceback
         print(f"[FOLLOWUP_STREAM] 오류 상세: {traceback.format_exc()}")
         return Response(content=f"Error: {str(e)}", media_type="text/plain")
@@ -1704,79 +1069,88 @@ async def generate_image(prompt: str) -> str:
         print(f"Error generating image: {str(e)}")
         return None
 
-async def get_streaming_response(prompt: str, model: str = "gpt-3.5-turbo", generate_image: bool = False):
-    """Stream a response from OpenAI API, optionally with an image"""
+async def get_streaming_response_async(messages: List[Dict], request: Request, generate_image: bool = False):
+    """Stream a response from LLM using AsyncOpenAI with custom headers"""
     try:
+        print(f"[LLM_STREAM] 🚀 LLM 스트리밍 시작")
+        
         # 이미지 URL (이미지 생성이 요청된 경우)
         image_url = None
-        if generate_image or "이미지" in prompt or "그림" in prompt or "image" in prompt.lower() or "picture" in prompt.lower():
-            image_url = await generate_image(prompt)
+        if generate_image:
+            # 실제 이미지 생성 로직은 별도 구현 필요
+            image_url = await generate_image(messages[-1]["content"] if messages else "")
         
-        if USING_NEW_SDK:
-            # New SDK style (>1.0)
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            stream = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                stream=True
-            )
-            
-            text_response = ""
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    text_response += content
-                    
-                    # 일반 텍스트만 스트리밍
-                    yield f"data: {content}\n\n"
-                await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
-            
-            # 텍스트 응답이 완료된 후 이미지 URL이 있으면 전송
-            if image_url:
+        # httpx 클라이언트 설정
+        httpx_client = httpx.AsyncClient(verify=False, timeout=None)
+        
+        # AsyncOpenAI 클라이언트 생성
+        client = AsyncOpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url="https://api.openai.com/v1",
+            http_client=httpx_client,
+            default_headers={
+                "x-dep-ticket": OPENAI_API_KEY,
+                "Send-System-Name": "ds2llm",
+                "User-Id": getattr(request, 'username', 'anonymous'),
+                "User-Type": "AD_ID",
+                "Prompt-Msg-Id": str(uuid.uuid4()),
+                "Completion-Msg-Id": str(uuid.uuid4()),
+            }
+        )
+        
+        print(f"[LLM_STREAM] 📤 메시지 전송: {len(messages)}개")
+        
+        # 스트리밍 호출
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            stream=True
+        )
+        
+        print(f"[LLM_STREAM] 📥 스트리밍 응답 시작")
+        
+        text_response = ""
+        async for chunk in response:
+            if chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                text_response += content
+                
+                try:
+                    # 비-ASCII 문자 허용, UTF-8 bytes로 즉시 전송
+                    payload = json.dumps({'content': content}, ensure_ascii=False)
+                    yield (f"data: {payload}\n\n").encode("utf-8")
+                    await asyncio.sleep(0.01)  # 청크 사이에 지연 추가하여 다른 API 처리 가능하도록 함
+                except (ConnectionResetError, BrokenPipeError, OSError, ConnectionAbortedError, ConnectionError) as e:
+                    # 클라이언트 연결이 끊어진 경우 조용히 종료
+                    print(f"[LLM_STREAM] Client disconnected during streaming lv2: {type(e).__name__}")
+                    return
+                except Exception as e:
+                    print(f"[LLM_STREAM] Unexpected error during streaming lv1: {str(e)}")
+                    return
+        
+        # 텍스트 응답이 완료된 후 이미지 URL이 있으면 전송
+        if image_url:
+            try:
                 response_data = {
                     "text": text_response,
                     "image_url": image_url
                 }
-                yield f"data: {json.dumps(response_data)}\n\n"
-            
-            yield "data: [DONE]\n\n"
-        else:
-            # Old SDK style (<1.0)
-            openai.api_key = OPENAI_API_KEY
-            stream = openai.ChatCompletion.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                stream=True
-            )
-            
-            text_response = ""
-            for chunk in stream:
-                if chunk['choices'][0].get('delta', {}).get('content'):
-                    content = chunk['choices'][0]['delta']['content']
-                    text_response += content
-                    
-                    # 일반 텍스트만 스트리밍
-                    yield f"data: {content}\n\n"
-                await asyncio.sleep(0.01)  # 부드러운 스트리밍을 위한 짧은 지연
-            
-            # 텍스트 응답이 완료된 후 이미지 URL이 있으면 전송
-            if image_url:
-                response_data = {
-                    "text": text_response,
-                    "image_url": image_url
-                }
-                yield f"data: {json.dumps(response_data)}\n\n"
-            
-            yield "data: [DONE]\n\n"
+                payload = json.dumps(response_data, ensure_ascii=False)
+                yield (f"data: {payload}\n\n").encode("utf-8")
+            except Exception as e:
+                print(f"[LLM_STREAM] Error sending image data: {str(e)}")
+        
+        print(f"[LLM_STREAM] ✅ 스트리밍 완료")
+        yield "data: [DONE]\n\n".encode("utf-8")
+        
     except Exception as e:
-        print(f"Error in streaming response: {str(e)}")
-        yield f"data: Error: {str(e)}\n\n"
-        yield "data: [DONE]\n\n" 
+        print(f"[LLM_STREAM] Error in streaming response: {str(e)}")
+        import traceback
+        print(f"[LLM_STREAM] 오류 상세: {traceback.format_exc()}")
+        try:
+            error_payload = json.dumps({'error': str(e)}, ensure_ascii=False)
+            yield (f"data: {error_payload}\n\n").encode("utf-8")
+            yield "data: [DONE]\n\n".encode("utf-8")
+        except Exception:
+            # 에러 전송도 실패한 경우 조용히 종료
+            return

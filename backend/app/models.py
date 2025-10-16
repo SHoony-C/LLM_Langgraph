@@ -12,6 +12,7 @@ class User(Base):
     hashed_password = Column(String(255))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     loginid = Column(String(100), nullable=True)  # Add loginid field for SSO users
+    deptname = Column(String(100), nullable=True)  # Add deptname field for department name
     
     # 관계 정의
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")

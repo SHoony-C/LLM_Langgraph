@@ -316,15 +316,24 @@ export default {
         await this.$store.dispatch('logout');
         console.log('[APP] 클라이언트 상태 정리 완료');
         
-        // 로그아웃 플래그 설정 (자동 리다이렉트 방지용)
-        sessionStorage.setItem('logout_redirect', 'true');
-        
         // OAuth 처리 플래그 초기화
         sessionStorage.removeItem('oauth_processing');
         sessionStorage.removeItem('sso_processed');
+        sessionStorage.removeItem('logout_redirect');
         
-        // 로그아웃 완료 후 현재 페이지에서 대기
-        console.log('[APP] 로그아웃 완료 - 사용자 액션 대기');
+        // 로그아웃 완료 후 즉시 SSO 로그인으로 리다이렉트
+        console.log('[APP] 로그아웃 완료 - SSO 로그인으로 리다이렉트');
+        setTimeout(() => {
+          try {
+            window.location.replace('http://localhost:8001/api/auth/auth_sh');
+          } catch (error) {
+            try {
+              window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+            } catch (error2) {
+              console.error('SSO 리다이렉트 실패:', error2);
+            }
+          }
+        }, 500); // 0.5초 후 리다이렉트
         
       } catch (error) {
         console.error('[APP] 로그아웃 처리 중 오류:', error);
@@ -335,10 +344,23 @@ export default {
         // 강제로 상태 정리
         this.$store.dispatch('logout');
         
-        // 로그아웃 플래그 설정
-        sessionStorage.setItem('logout_redirect', 'true');
+        // OAuth 처리 플래그 초기화
         sessionStorage.removeItem('oauth_processing');
         sessionStorage.removeItem('sso_processed');
+        sessionStorage.removeItem('logout_redirect');
+        
+        // 에러 발생 시에도 SSO 로그인으로 리다이렉트
+        setTimeout(() => {
+          try {
+            window.location.replace('http://localhost:8001/api/auth/auth_sh');
+          } catch (error) {
+            try {
+              window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+            } catch (error2) {
+              console.error('SSO 리다이렉트 실패:', error2);
+            }
+          }
+        }, 500);
       }
     },
     async saveApiKey() {
@@ -494,30 +516,61 @@ export default {
       }
     },
     enableCopying() {
-      // 모든 요소에서 복사 차단 방지
-      document.addEventListener('selectstart', (e) => {
+      // 모든 복사 관련 이벤트 허용
+      const allowEvent = (e) => {
         e.stopPropagation();
         return true;
-      });
+      };
       
-      document.addEventListener('contextmenu', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      // 선택 시작 이벤트 허용
+      document.addEventListener('selectstart', allowEvent, { capture: true, passive: false });
+      
+      // 우클릭 컨텍스트 메뉴 허용
+      document.addEventListener('contextmenu', allowEvent, { capture: true, passive: false });
       
       // 복사 이벤트 허용
-      document.addEventListener('copy', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      document.addEventListener('copy', allowEvent, { capture: true, passive: false });
       
-      // 선택 이벤트 허용
-      document.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      // 마우스 이벤트 허용
+      document.addEventListener('mousedown', allowEvent, { capture: true, passive: false });
+      document.addEventListener('mouseup', allowEvent, { capture: true, passive: false });
+      document.addEventListener('mousemove', allowEvent, { capture: true, passive: false });
       
-      console.log('복사 기능이 활성화되었습니다.');
+      // 키보드 복사 단축키 허용 (Ctrl+C, Ctrl+A)
+      document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          if (e.key === 'c' || e.key === 'C' || e.key === 'a' || e.key === 'A' || e.key === 'v' || e.key === 'V') {
+            e.stopPropagation();
+            return true;
+          }
+        }
+        return true;
+      }, { capture: true, passive: false });
+      
+      // 드래그 이벤트 허용
+      document.addEventListener('dragstart', allowEvent, { capture: true, passive: false });
+      
+      // CSS 스타일로 복사 허용 강제 적용
+      const style = document.createElement('style');
+      style.textContent = `
+        * {
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
+          user-select: text !important;
+          -webkit-touch-callout: default !important;
+        }
+        button, .btn, .action-btn, .send-btn, .toggle-sidebar-btn, 
+        .new-chat-btn, .delete-btn, .close-btn {
+          -webkit-user-select: none !important;
+          -moz-user-select: none !important;
+          -ms-user-select: none !important;
+          user-select: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+      
+      console.log('✅ 복사 기능이 완전히 활성화되었습니다. Ctrl+C로 텍스트를 복사할 수 있습니다.');
     },
     handleSSOCallback() {
       // URL에서 토큰 파라미터 확인 (백엔드 /acs에서 리다이렉트된 경우)

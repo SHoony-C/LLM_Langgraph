@@ -129,6 +129,7 @@ async function processOAuthToken(idToken, state) {
                     username: userData.username,
                     email: userData.mail,
                     loginid: userData.loginid,
+                    deptname: userData.deptname,
                     id: userData.userid
                   }
                 });
@@ -616,7 +617,12 @@ const store = createStore({
       const response = await fetch('http://localhost:8001/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userData)
+        body: JSON.stringify({
+          username: userData.username,
+          mail: userData.email,
+          deptname: userData.deptname,
+          password: userData.password
+        })
       });
       
       if (!response.ok) {

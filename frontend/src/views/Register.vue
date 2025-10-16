@@ -28,6 +28,16 @@
         </div>
         
         <div class="form-group">
+          <label for="deptname">부서명</label>
+          <input 
+            type="text" 
+            id="deptname" 
+            v-model="deptname" 
+            placeholder="부서명을 입력하세요 (선택사항)" 
+          />
+        </div>
+        
+        <div class="form-group">
           <label for="password">비밀번호</label>
           <input 
             type="password" 
@@ -74,6 +84,7 @@ export default {
     return {
       username: '',
       email: '',
+      deptname: '',
       password: '',
       confirmPassword: '',
       isLoading: false,
@@ -112,6 +123,7 @@ export default {
         await this.$store.dispatch('register', {
           username: this.username,
           email: this.email,
+          deptname: this.deptname,
           password: this.password
         });
         

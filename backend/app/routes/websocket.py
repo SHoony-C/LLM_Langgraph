@@ -42,19 +42,15 @@ async def websocket_endpoint(websocket: WebSocket):
         clients.discard(websocket)
 
 async def broadcast(message: str):
-    print(f"[websocket] 🔔 Redis 메시지 브로드캐스트 시작")
-    print(f"[websocket] 📄 전체 메시지: {message}")
-    print(f"[websocket] 👥 연결된 클라이언트 수: {len(clients)}")
+    print(f"[websocket] 🔔 브로드캐스트: {len(clients)}개 클라이언트")
     
     # 반복 도중 remove 충돌 방지
     for ws in list(clients):
         try:
             await ws.send_text(message)
-            print(f"[websocket] ✅ 메시지 전송 성공: {ws.client}")
         except Exception as e:
-            print(f"[websocket] ❌ 메시지 전송 실패: {ws.client}, 오류: {e}")
+            print(f"[websocket] ❌ 전송 실패: {e}")
             clients.discard(ws)
-    print(f"[websocket] 🎯 브로드캐스트 완료, 연결된 클라이언트: {len(clients)}")
 
 async def redis_listener_loop():
     await pubsub.subscribe(channel_name)
@@ -62,11 +58,9 @@ async def redis_listener_loop():
     try:
         # get_message + sleep 대신 listen()으로 블로킹 루프(폴링 제거)
         async for msg in pubsub.listen():
-            print(f"[redis] 📨 원시 메시지 수신: {msg}")
             if msg.get("type") != "message":
-                print(f"[redis] ⏭️ 메시지 타입이 'message'가 아님: {msg.get('type')}")
                 continue
-            print(f"[redis] ✅ 유효한 메시지 수신: {msg['data']}")
+            print(f"[redis] ✅ 메시지 수신: {msg['data'][:100]}...")
             await broadcast(msg["data"])
     except asyncio.CancelledError:
         print(f"[redis] ❌ Redis 리스너 취소됨")

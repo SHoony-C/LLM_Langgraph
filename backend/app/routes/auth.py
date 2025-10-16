@@ -42,7 +42,8 @@ def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     db_user = User(
         username=user_data.username,
         mail=user_data.mail,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        deptname=user_data.deptname
     )
     db.add(db_user)
     db.commit()
@@ -157,6 +158,7 @@ async def login_for_access_token(request: Request, db: Session = Depends(get_db)
                 username = decoded_token.get('name', username)
                 mail = decoded_token.get('email', '')
                 loginid = decoded_token.get('sub')
+                deptname = decoded_token.get('deptname', body.get('deptname', ''))
                 
                 if not username:
                     raise HTTPException(
@@ -174,15 +176,22 @@ async def login_for_access_token(request: Request, db: Session = Depends(get_db)
                         username=username,
                         mail=mail,
                         hashed_password=hashed_password,
-                        loginid=loginid
+                        loginid=loginid,
+                        deptname=deptname
                     )
                     db.add(db_user)
                     db.commit()
                     db.refresh(db_user)
                 else:
-                    # 기존 사용자 로그인 시 loginid 업데이트
+                    # 기존 사용자 로그인 시 정보 업데이트
+                    updated = False
                     if loginid and db_user.loginid != loginid:
                         db_user.loginid = loginid
+                        updated = True
+                    if deptname and db_user.deptname != deptname:
+                        db_user.deptname = deptname
+                        updated = True
+                    if updated:
                         db.commit()
                         db.refresh(db_user)
                 
@@ -352,7 +361,8 @@ async def acs(request: Request):
                     username = decoded_token.get('name', '')
                     mail = decoded_token.get('email')
                     loginid = decoded_token.get('sub')
-                    print(f"Extracted user info - username: '{username}', mail: '{mail}', loginid: '{loginid}'")
+                    deptname = decoded_token.get('deptname', '')
+                    print(f"Extracted user info - username: '{username}', mail: '{mail}', loginid: '{loginid}', deptname: '{deptname}'")
 
                     if not username or not loginid:
                         return RedirectResponse(
@@ -371,7 +381,8 @@ async def acs(request: Request):
                             username=username,
                             mail=mail or "",
                             hashed_password=hashed_password,
-                            loginid=loginid
+                            loginid=loginid,
+                            deptname=deptname
                         )
                         db.add(db_user)
                         db.commit()
@@ -382,6 +393,8 @@ async def acs(request: Request):
                             db_user.mail = mail
                         if username and db_user.username != username:
                             db_user.username = username
+                        if deptname and db_user.deptname != deptname:
+                            db_user.deptname = deptname
                         db.commit()
                         db.refresh(db_user)
                     
@@ -405,6 +418,7 @@ async def acs(request: Request):
                                 "username": db_user.username,
                                 "mail": db_user.mail or "",
                                 "loginid": db_user.loginid or "",
+                                "deptname": db_user.deptname or "",
                                 "userid": db_user.id
                             }
                         },
@@ -482,8 +496,7 @@ async def acs(request: Request):
                     username = decoded_token.get('name', '')
                     mail = decoded_token.get('email')
                     loginid = decoded_token.get('sub')
-
-                    
+                    deptname = decoded_token.get('deptname', '')
                     
                     if not username or not loginid:
                         return RedirectResponse(
@@ -502,7 +515,8 @@ async def acs(request: Request):
                             username=username,
                             mail=mail or "",
                             hashed_password=hashed_password,
-                            loginid=loginid
+                            loginid=loginid,
+                            deptname=deptname
                         )
                         db.add(db_user)
                         db.commit()
@@ -513,6 +527,8 @@ async def acs(request: Request):
                             db_user.mail = mail
                         if username and db_user.username != username:
                             db_user.username = username
+                        if deptname and db_user.deptname != deptname:
+                            db_user.deptname = deptname
                         db.commit()
                         db.refresh(db_user)
                     
@@ -536,6 +552,7 @@ async def acs(request: Request):
                                 "username": db_user.username,
                                 "mail": db_user.mail or "",
                                 "loginid": db_user.loginid or "",
+                                "deptname": db_user.deptname or "",
                                 "userid": db_user.id
                             }
                         },
@@ -565,11 +582,12 @@ async def acs(request: Request):
                         "username": db_user.username,
                         "mail": db_user.mail or "",
                         "loginid": db_user.loginid or "",
+                        "deptname": db_user.deptname or "",
                         "userid": db_user.id
                     }, ensure_ascii=False, separators=(',', ':'), default=str)
                     
                     # 쿠키 값이 너무 길어지지 않도록 사용자 정보를 간소화
-                    user_info_cookie = f"username={db_user.username}&mail={db_user.mail or ''}&loginid={db_user.loginid or ''}&userid={db_user.id}"
+                    user_info_cookie = f"username={db_user.username}&mail={db_user.mail or ''}&loginid={db_user.loginid or ''}&deptname={db_user.deptname or ''}&userid={db_user.id}"
                     
                     response.set_cookie(
                         key="user_info",

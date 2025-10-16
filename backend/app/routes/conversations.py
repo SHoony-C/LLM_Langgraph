@@ -154,14 +154,10 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 }
                 conv_dict["messages"].append(assistant_message)
         
-        # 디버깅을 위한 로그 추가 (LangGraph 정보 확인)
-        langgraph_messages = [msg for msg in conv_dict['messages'] if msg.get('q_mode') in ['search', None] and (msg.get('keyword') or msg.get('db_search_title'))]
-        if langgraph_messages:
-            print(f"[CONVERSATION] 📊 대화 {conversation.id}에 LangGraph 정보 포함:")
-            for i, msg in enumerate(langgraph_messages):
-                print(f"  메시지 {i+1}: role={msg['role']}, q_mode={msg.get('q_mode')}, keyword={bool(msg.get('keyword'))}, db_search_title={bool(msg.get('db_search_title'))}")
-        else:
-            print(f"[CONVERSATION] ⚠️ 대화 {conversation.id}에 LangGraph 정보 없음")
+        # LangGraph 정보 확인 (간소화된 로그)
+        has_langgraph = any(msg.get('keyword') or msg.get('db_search_title') for msg in conv_dict['messages'])
+        if has_langgraph:
+            print(f"[CONVERSATION] 📊 대화 {conversation.id}: LangGraph 정보 포함")
         
         # 요약 정보 추가
         summary_info = get_conversation_summary(conversation, db)
@@ -230,16 +226,8 @@ def create_message(
         except Exception as e:
             assistant_response = f"Sorry, I encountered an error: {str(e)}"
     
-    # 디버깅을 위한 로그 추가
-    print(f"[MESSAGE] 📋 메시지 생성 요청 데이터:")
-    print(f"  - question: {message_request.question}")
-    print(f"  - q_mode: {message_request.q_mode}")
-    print(f"  - keyword 길이: {len(message_request.keyword) if message_request.keyword else 0}자")
-    print(f"  - keyword 미리보기: {message_request.keyword[:200] if message_request.keyword else 'None'}...")
-    print(f"  - db_search_title: {message_request.db_search_title}")
-    print(f"  - skip_llm: {message_request.skip_llm}")
-    print(f"  - assistant_response 길이: {len(message_request.assistant_response) if message_request.assistant_response else 0}자")
-    print(f"  - assistant_response 미리보기: {message_request.assistant_response[:100] if message_request.assistant_response else 'None'}...")
+    # 메시지 생성 로그 (간소화)
+    print(f"[MESSAGE] 📋 새 메시지: q_mode={message_request.q_mode}, skip_llm={message_request.skip_llm}")
     
     # user_name 검증 및 설정
     user_name = current_user.loginid or current_user.username
@@ -267,63 +255,27 @@ def create_message(
             assistantMessage=existing_message
         )
     
-    # Create single message with both question and answer
-    print(f"[MESSAGE] 💾 Message 객체 생성 중...")
-    print(f"  - conversation_id: {conversation_id}")
-    print(f"  - role: user")
-    print(f"  - question 길이: {len(message_request.question)}자")
-    print(f"  - ans 길이: {len(assistant_response)}자")
-    print(f"  - user_name: {user_name}")
-    print(f"  - q_mode: {message_request.q_mode}")
-    print(f"  - keyword 존재: {bool(message_request.keyword)}")
-    print(f"  - db_search_title 존재: {bool(message_request.db_search_title)}")
-    
+    # 메시지 생성 및 저장
     message = Message(
         conversation_id=conversation_id,
         role="user",
         question=message_request.question,
         ans=assistant_response,
-        user_name=user_name,  # 검증된 사용자명 사용
-        q_mode=message_request.q_mode,  # q_mode 추가
-        keyword=message_request.keyword,  # keyword 추가
-        db_search_title=message_request.db_search_title  # db_search_title 추가
+        user_name=user_name,
+        q_mode=message_request.q_mode,
+        keyword=message_request.keyword,
+        db_search_title=message_request.db_search_title
     )
-    print(f"[MESSAGE] ✅ Message 객체 생성 완료")
     
-    print(f"[MESSAGE] 💾 새 메시지 저장 중...")
     try:
         db.add(message)
-        print(f"[MESSAGE] 📝 db.add() 완료")
-        
         db.commit()
-        print(f"[MESSAGE] 💾 db.commit() 완료")
-        
         db.refresh(message)
-        print(f"[MESSAGE] 🔄 db.refresh() 완료")
-        
         print(f"[MESSAGE] ✅ 메시지 저장 완료. ID: {message.id}")
     except Exception as e:
-        print(f"[MESSAGE] ❌ 데이터베이스 저장 오류: {e}")
-        print(f"[MESSAGE] ❌ 오류 타입: {type(e)}")
-        import traceback
-        print(f"[MESSAGE] ❌ 오류 스택: {traceback.format_exc()}")
+        print(f"[MESSAGE] ❌ 저장 오류: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"데이터베이스 저장 오류: {str(e)}")
-    
-    # 저장된 데이터 확인
-    print(f"[MESSAGE] 📊 저장된 메시지 데이터 확인:")
-    print(f"  - ID: {message.id}")
-    print(f"  - conversation_id: {message.conversation_id}")
-    print(f"  - role: {message.role}")
-    print(f"  - question: {message.question[:100]}...")
-    print(f"  - ans 길이: {len(message.ans) if message.ans else 0}자")
-    print(f"  - ans 미리보기: {message.ans[:100] if message.ans else 'None'}...")
-    print(f"  - q_mode: {message.q_mode}")
-    print(f"  - keyword 길이: {len(message.keyword) if message.keyword else 0}자")
-    print(f"  - keyword 미리보기: {message.keyword[:200] if message.keyword else 'None'}...")
-    print(f"  - db_search_title: {message.db_search_title}")
-    print(f"  - user_name: {message.user_name}")
-    print(f"  - created_at: {message.created_at}")
     
     return MessageResponse(
         userMessage=message,

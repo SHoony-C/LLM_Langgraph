@@ -341,6 +341,7 @@ export default {
       userInput: '',
       isLoading: false,
       scrollThrottled: false,
+      scrollTimeout: null, // 스크롤 디바운스용
       lastMessageHeight: 0, // 마지막 메시지 높이 저장
       lastScrollPosition: 0, // 마지막 스크롤 위치 저장
       observer: null, // 메시지 크기 변화 감지를 위한 observer
@@ -1435,9 +1436,9 @@ export default {
             console.log('🔄 토큰 갱신 완료, 저장 재시도...');
             
             // 토큰 갱신 후 저장 재시도
-            setTimeout(() => {
+            this.$nextTick(() => {
               this.saveAdditionalQuestionMessage(question, answer);
-            }, 1000);
+            });
           } catch (refreshError) {
             console.error('❌ 토큰 갱신 실패:', refreshError);
             this.saveStatus = '⚠️ 인증이 만료되었습니다. 다시 로그인해주세요.';
@@ -1475,22 +1476,21 @@ export default {
           this.saveStatus = `⚠️ 메시지 저장 실패: ${errorMessage}`;
           console.error('💾 저장 실패 상태 설정:', this.saveStatus);
           
-          // 저장 실패 시 재시도 로직 추가
-          console.log('🔄 2초 후 추가 질문 메시지 저장 재시도 예약...');
-          setTimeout(() => {
-            console.log('🔄 추가 질문 메시지 저장 재시도 시작...');
+          // 저장 실패 시 재시도 로직 (최적화)
+          console.log('🔄 추가 질문 메시지 저장 재시도...');
+          this.$nextTick(() => {
             this.saveAdditionalQuestionMessage(question, answer);
-          }, 2000);
+          });
         }
       } catch (error) {
         console.error('추가 질문 메시지 저장 중 오류:', error);
         this.saveStatus = `⚠️ 메시지 저장 오류: ${error.message}`;
         
-        // 오류 발생 시 재시도 로직 추가
-        setTimeout(() => {
-          console.log('🔄 추가 질문 메시지 저장 재시도...');
+        // 오류 발생 시 재시도 로직 (최적화)
+        console.log('🔄 추가 질문 메시지 저장 재시도...');
+        this.$nextTick(() => {
           this.saveAdditionalQuestionMessage(question, answer);
-        }, 3000);
+        });
       } finally {
         this.isSavingMessage = false;
       }
@@ -1851,7 +1851,7 @@ export default {
           text: keyword,
           category: '키워드'
         }));
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await this.$nextTick();
       }
       
       if (result.candidates_total) {
@@ -1864,13 +1864,13 @@ export default {
           source: '검색 결과',
           date: new Date().toISOString().split('T')[0]
         }));
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await this.$nextTick();
       }
       
       if (result.response && result.response.answer) {
         this.currentStep = 4;
         this.finalAnswer = result.response.answer;
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await this.$nextTick();
       }
       
       // 이미지 생성 (선택적) - LangGraph에서 제공하는 이미지가 있으면 표시
@@ -2326,50 +2326,74 @@ LangGraph API 연결에 실패했습니다.
       // Store action 호출
       await this.$store.dispatch('submitFeedback', { messageId, feedback });
     },
+    // 스크롤 최적화 - 디바운스 적용
     scrollToBottom() {
-      if (this.$refs.chatMessages) {
-        const scrollEl = this.$refs.chatMessages;
-        
-        // 부드러운 스크롤링을 위해 requestAnimationFrame 사용
-        requestAnimationFrame(() => {
-        scrollEl.scrollTop = scrollEl.scrollHeight;
-        });
+      if (this.scrollTimeout) {
+        clearTimeout(this.scrollTimeout);
       }
+      
+      this.scrollTimeout = setTimeout(() => {
+        if (this.$refs.chatMessages) {
+          const scrollEl = this.$refs.chatMessages;
+          requestAnimationFrame(() => {
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+          });
+        }
+      }, 16); // 60fps에 맞춘 최적화
     },
     copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => {
-        // Text copied to clipboard
-      }).catch(() => {
-        // Error copying text
-      });
+      // 현대적인 Clipboard API 사용
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+          console.log('✅ 텍스트가 클립보드에 복사되었습니다.');
+        }).catch((err) => {
+          console.error('❌ 클립보드 복사 실패:', err);
+          this.fallbackCopyToClipboard(text);
+        });
+      } else {
+        // 폴백 방법 사용
+        this.fallbackCopyToClipboard(text);
+      }
     },
-    // 새로운 애니메이션 메서드들
+    
+    // 폴백 복사 방법
+    fallbackCopyToClipboard(text) {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        textArea.style.opacity = '0';
+        textArea.setAttribute('readonly', '');
+        document.body.appendChild(textArea);
+        
+        textArea.focus();
+        textArea.select();
+        textArea.setSelectionRange(0, 99999); // 모바일 지원
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+          console.log('✅ 폴백 방법으로 텍스트가 클립보드에 복사되었습니다.');
+        } else {
+          console.error('❌ 폴백 복사 방법도 실패했습니다.');
+        }
+      } catch (err) {
+        console.error('❌ 폴백 복사 중 오류:', err);
+      }
+    },
+    
+    // 최적화된 애니메이션 메서드들
     beforeMessageEnter(el) {
-      // 시작 위치를 현재 위치로 설정하고 투명도만 조절
       el.style.opacity = 0;
-      el.style.position = 'relative';
-      el.style.top = '0';
-      el.style.left = '0';
-      el.style.transform = 'translateY(0)';
     },
     enterMessage(el, done) {
-      // 애니메이션 시작 전 높이 기록 (점프 방지용)
-      const height = el.offsetHeight;
-      
-      // 높이 보존을 위한 스타일 설정
-      el.style.minHeight = `${height}px`;
-      el.style.transform = 'translateY(0)';
-      
-      // 투명도만 변경하고 바로 완료 (애니메이션 없음) 
       el.style.opacity = 1;
       done();
     },
     leaveMessage(el, done) {
-      // 나가는 요소의 높이를 기록해 놓음 (점프 방지용)
-      const height = el.offsetHeight;
-      this.lastMessageHeight = Math.max(height, this.lastMessageHeight);
-      
-      // 즉시 제거 (애니메이션 없음)
       el.style.opacity = 0;
       done();
     },
@@ -2403,6 +2427,7 @@ LangGraph API 연결에 실패했습니다.
     this.$nextTick(() => {
       this.safeFocus();
       this.adjustTextareaHeight(); // 초기 높이 설정
+// 텍스트 선택은 CSS에서 처리됨
     });
   },
   updated() {
@@ -2410,6 +2435,27 @@ LangGraph API 연결에 실패했습니다.
     this.$nextTick(() => {
       this.scrollToBottom();
     });
+  },
+  beforeDestroy() {
+    // 메모리 누수 방지를 위한 정리 작업
+    if (this.scrollTimeout) {
+      clearTimeout(this.scrollTimeout);
+      this.scrollTimeout = null;
+    }
+    
+    // WebSocket 연결 정리
+    if (this.websocket) {
+      this.websocket.close();
+      this.websocket = null;
+    }
+    
+    // Observer 정리
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    
+    console.log('🧹 Home 컴포넌트 정리 완료');
   },
   watch: {
 
@@ -2426,21 +2472,15 @@ LangGraph API 연결에 실패했습니다.
       if (!this.scrollThrottled) {
         this.scrollThrottled = true;
         requestAnimationFrame(() => {
-        this.scrollToBottom();
-          setTimeout(() => {
-            this.scrollThrottled = false;
-          }, 100);
-      });
+          this.scrollToBottom();
+          this.scrollThrottled = false;
+        });
       }
     },
     // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원
     '$store.state.currentConversation'() {
       this.$nextTick(() => {
         this.scrollToBottom();
-        
-        setTimeout(() => {
-          this.scrollToBottom();
-        }, 300);
       });
       
       // 랭그래프 복원 로직 추가
@@ -2464,19 +2504,23 @@ LangGraph API 연결에 실패했습니다.
       if (newValue) {
         // 스트리밍 시작 시 타이머 설정
         this.$nextTick(() => {
-          // 잠시 후 스트리밍 메시지 표시 (깜빡임 방지)
-          setTimeout(() => {
-            this.streamingVisible = true;
-          }, 50);
+          // 스트리밍 메시지 즉시 표시 (성능 최적화)
+          this.streamingVisible = true;
           
           if (this.$refs.streamingText) {
-            // Observer setup to track streaming message size changes
-            const resizeObserver = new ResizeObserver(() => {
-              this.scrollToBottom();
-            });
-            
-            resizeObserver.observe(this.$refs.streamingText);
-            this.observer = resizeObserver;
+            // Observer setup to track streaming message size changes (최적화)
+            if (!this.observer) {
+              this.observer = new ResizeObserver(() => {
+                if (!this.scrollThrottled) {
+                  this.scrollThrottled = true;
+                  requestAnimationFrame(() => {
+                    this.scrollToBottom();
+                    this.scrollThrottled = false;
+                  });
+                }
+              });
+            }
+            this.observer.observe(this.$refs.streamingText);
           }
         });
       } else {
@@ -2492,11 +2536,6 @@ LangGraph API 연결에 실패했습니다.
         // 스트리밍 완료 후 스크롤 조정
         this.$nextTick(() => {
           this.scrollToBottom();
-          
-          // 약간의 지연 후 한번 더 스크롤 조정
-          setTimeout(() => {
-            this.scrollToBottom();
-          }, 100);
         });
       }
     },

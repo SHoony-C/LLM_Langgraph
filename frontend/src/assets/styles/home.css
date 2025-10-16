@@ -30,15 +30,9 @@
   }
 }
 
-@keyframes messagePulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.02); }
-}
+/* messagePulse 애니메이션 제거 - 성능 최적화 */
 
-@keyframes gradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
+/* 성능 최적화를 위해 gradientShift 애니메이션 제거 */
 
 @keyframes typing {
   0%, 50%, 100% { opacity: 1; }
@@ -156,7 +150,7 @@
   padding: 16px 20px;
   max-width: 70%;
   box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
-  animation: gradientShift 3s ease infinite;
+  /* 성능 최적화를 위해 애니메이션 제거 */
   position: relative;
   overflow: hidden;
 }
@@ -189,7 +183,7 @@
   padding: 16px 20px;
   max-width: 75%;
   box-shadow: 0 8px 25px rgba(90, 103, 216, 0.3);
-  animation: gradientShift 4s ease infinite;
+  /* 성능 최적화를 위해 배경 애니메이션 제거 */
   position: relative;
   overflow: hidden;
 }
@@ -212,7 +206,7 @@
 .message.streaming .message-content {
   background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
   background-size: 200% 200%;
-  animation: gradientShift 2s ease infinite;
+  /* 성능 최적화를 위해 배경 애니메이션 제거 */
 }
 
 .message-text {
@@ -221,6 +215,13 @@
   word-wrap: break-word;
   overflow-wrap: break-word;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  /* 복사 허용 강화 */
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+  cursor: text;
 }
 
 .message-image {
@@ -437,7 +438,7 @@
 
 .attachment-btn:hover {
   background: rgba(255, 255, 255, 0.1);
-  transform: scale(1.1) rotate(10deg);
+  transform: scale(1.05); /* 회전 제거로 성능 최적화 */
 }
 
 .attachment-icon {
@@ -486,9 +487,8 @@
 }
 
 .send-btn:hover:not(:disabled) {
-  transform: scale(1.15) rotate(15deg);
+  transform: scale(1.1); /* 회전과 pulse 애니메이션 제거로 성능 최적화 */
   box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
-  animation: pulse 1s infinite;
 }
 
 .send-btn:disabled {
@@ -518,33 +518,7 @@
   to { transform: rotate(360deg); }
 }
 
-@keyframes spinEnhanced {
-  0% { 
-    transform: rotate(0deg) scale(1);
-    border-top-color: #667eea;
-    border-right-color: #00f2fe;
-  }
-  25% {
-    transform: rotate(90deg) scale(1.1);
-    border-top-color: #00f2fe;
-    border-right-color: #667eea;
-  }
-  50% { 
-    transform: rotate(180deg) scale(1);
-    border-top-color: #667eea;
-    border-right-color: #00f2fe;
-  }
-  75% {
-    transform: rotate(270deg) scale(1.1);
-    border-top-color: #00f2fe;
-    border-right-color: #667eea;
-  }
-  100% { 
-    transform: rotate(360deg) scale(1);
-    border-top-color: #667eea;
-    border-right-color: #00f2fe;
-  }
-}
+/* spinEnhanced 애니메이션 제거 - 성능 최적화를 위해 기본 spin 사용 */
 
 @keyframes loadingPulse {
   0%, 100% { 
@@ -1071,7 +1045,7 @@
   border-radius: 50%;
   border-top: 3px solid #667eea;
   border-right: 3px solid #00f2fe;
-  animation: spinEnhanced 1.2s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+  animation: spin 1s linear infinite; /* 간단한 spin 애니메이션으로 최적화 */
   filter: drop-shadow(0 2px 8px rgba(102, 126, 234, 0.4));
 }
 
@@ -1083,7 +1057,7 @@
   background: rgba(102, 126, 234, 0.1);
   border-radius: 12px;
   border: 1px solid rgba(102, 126, 234, 0.2);
-  animation: pulse 2s ease-in-out infinite;
+  /* pulse 애니메이션 제거 - 성능 최적화 */
 }
 
 .loading-container span {
@@ -1203,6 +1177,13 @@
   line-height: 1.6;
   color: var(--text-color);
   white-space: pre-line;
+  /* 복사 허용 강화 */
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+  cursor: text;
 }
 
 .answer-content strong {
