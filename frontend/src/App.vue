@@ -398,8 +398,11 @@ export default {
           console.log('토큰 검증 실패:', response.status);
           this.$store.dispatch('logout');
         } else {
-          // 인증된 사용자의 대화 목록 가져오기
-          this.$store.dispatch('fetchConversations');
+          // 인증된 사용자의 대화 목록 가져오기 (중복 호출 방지)
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations');
+          }
         }
       } catch (error) {
         console.error('토큰 검증 중 오류:', error);
@@ -423,6 +426,9 @@ export default {
       // 대화를 store에 설정 (랭그래프 복원 트리거)
       this.$store.commit('setCurrentConversation', conversation);
       this.$store.commit('setShouldScrollToBottom', true);
+      
+      // Home 컴포넌트에 기존 대화 선택 신호 전송 (실시간 기능 비활성화용)
+      this.$store.commit('setConversationRestored', true);
       
       console.log('setCurrentConversation 호출 완료, store 상태:', {
         currentConversation: this.$store.state.currentConversation,
@@ -915,8 +921,11 @@ export default {
         
         if (response.ok) {
           console.log('[APP] 토큰 유효성 검사 통과');
-          // 인증된 사용자의 대화 목록 가져오기
-          this.$store.dispatch('fetchConversations');
+          // 인증된 사용자의 대화 목록 가져오기 (중복 호출 방지)
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations');
+          }
           return;
         } else {
           console.log('[APP] 토큰 만료됨 - 로그아웃 처리');
@@ -997,13 +1006,16 @@ export default {
             user: userData
           });
           
-          // 인증 상태 복원 후 대화 목록 가져오기
+          // 인증 상태 복원 후 대화 목록 가져오기 (중복 호출 방지)
           console.log('[APP] 인증 상태 복원 후 대화 목록 가져오기');
-          this.$store.dispatch('fetchConversations').then(() => {
-            console.log('[APP] mounted에서 대화 목록 가져오기 완료');
-          }).catch(error => {
-            console.error('[APP] mounted에서 대화 목록 가져오기 실패:', error);
-          });
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations').then(() => {
+              console.log('[APP] mounted에서 대화 목록 가져오기 완료');
+            }).catch(error => {
+              console.error('[APP] mounted에서 대화 목록 가져오기 실패:', error);
+            });
+          }
         }
         this.validateAuthToken();
       } catch (error) {

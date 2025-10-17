@@ -362,6 +362,7 @@ const store = createStore({
       isStreaming: false,
       streamingMessage: '',
       shouldScrollToBottom: false,
+      conversationRestored: false, // 대화 복원 상태
       _feedbackUpdateTrigger: 0 // 피드백 업데이트 강제 반응성 트리거
     }
   },
@@ -581,6 +582,9 @@ const store = createStore({
     },
     setShouldScrollToBottom(state, value) {
       state.shouldScrollToBottom = value;
+    },
+    setConversationRestored(state, value) {
+      state.conversationRestored = value;
     },
     setLlamaApiSettings(state, { apiKey, apiBase, apiEndpoint }) {
       state.llamaApiKey = apiKey;

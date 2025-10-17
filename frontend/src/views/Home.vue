@@ -363,6 +363,18 @@ export default {
       rangraphHistory: [], // 랭그래프 히스토리 (추가 질문 모드용)
       isFirstQuestionInSession: true, // 현재 세션에서 첫 번째 질문 여부
       
+      // 성능 최적화를 위한 캐시 변수들
+      cachedMessages: null,
+      cachedConversationId: null,
+      cachedMessagesLength: 0,
+      lastRestoredConversationId: null,
+      lastRestoredMessageCount: 0,
+      scrollPending: false,
+      
+      // 실시간 기능 보존을 위한 상태 변수들
+      isNewConversation: true, // 새 대화 여부 (실시간 기능 활성화용)
+      isRestoringConversation: false // 대화 복원 중 여부
+      
     };
   },
   computed: {
@@ -372,7 +384,7 @@ export default {
       'isStreaming',
       'streamingMessage'
     ]),
-    // 메시지 배열의 반응성을 보장하기 위한 computed 속성
+    // 메시지 배열의 반응성을 보장하기 위한 computed 속성 (메모이제이션 최적화)
     currentMessages() {
       const currentConversation = this.$store.state.currentConversation;
       
@@ -380,9 +392,15 @@ export default {
         return [];
       }
       
-      const messages = [...currentConversation.messages]; // 새 배열 생성으로 반응성 보장
+      // 메시지 배열 참조가 변경되지 않았다면 기존 배열 반환 (성능 최적화)
+      if (this.cachedMessages && 
+          this.cachedConversationId === currentConversation.id &&
+          this.cachedMessagesLength === currentConversation.messages.length) {
+        return this.cachedMessages;
+      }
       
-      return messages;
+      // 캐시 업데이트는 watch에서 처리하도록 변경
+      return currentConversation.messages;
     },
     // 개별 메시지의 피드백 상태를 확인하는 메소드
     getMessageFeedback() {
@@ -399,8 +417,20 @@ export default {
 
   },
   methods: {
-    // conversation에서 랭그래프 정보 복원
+    // conversation에서 랭그래프 정보 복원 (성능 최적화 + 실시간 기능 보존)
     async restoreRangraphFromConversation(conversation) {
+      // 대화 복원 상태 설정
+      this.isRestoringConversation = true;
+      this.isNewConversation = false; // 기존 대화 복원
+      
+      // 캐시 확인 - 동일한 대화에 대해 이미 복원했다면 스킵 (성능 최적화)
+      if (this.lastRestoredConversationId === conversation?.id && 
+          this.lastRestoredMessageCount === conversation?.messages?.length) {
+        console.log('동일한 대화에 대해 이미 복원됨 - 스킵');
+        this.isRestoringConversation = false;
+        return;
+      }
+      
       console.log('restoreRangraphFromConversation 호출됨:', {
         conversation: conversation,
         hasMessages: !!conversation?.messages,
@@ -411,74 +441,51 @@ export default {
         console.log('대화 또는 메시지가 없어 랭그래프 복원 불가');
         // 새 대화이므로 첫 번째 질문 상태로 초기화
         this.isFirstQuestionInSession = true;
+        this.lastRestoredConversationId = null;
+        this.lastRestoredMessageCount = 0;
         return;
       }
       
+      // 비동기 처리로 UI 블로킹 방지
+      await this.$nextTick();
+      
       console.log('랭그래프 복원 시작:', {
         conversationId: conversation.id,
-        messageCount: conversation.messages.length,
-        messages: conversation.messages.map(m => ({ 
-          id: m.id, 
-          q_mode: m.q_mode, 
-          role: m.role,
-          question: m.question,
-          keyword: m.keyword,
-          db_search_title: m.db_search_title,
-          ans: m.ans
-        }))
+        messageCount: conversation.messages.length
       });
       
-      // q_mode가 'search'인 메시지를 찾아서 랭그래프 복원
+      // 성능 최적화: search 메시지만 먼저 필터링 (가장 빠른 조건)
       const searchMessages = conversation.messages.filter(msg => msg.q_mode === 'search');
       
-      // search 메시지가 없으면 첫 번째 사용자 메시지에서 LangGraph 정보 찾기
+      // search 메시지가 없으면 첫 번째 사용자 메시지에서 LangGraph 정보 찾기 (최적화)
       let firstQuestionMessage = null;
       if (searchMessages.length === 0) {
-        // 모든 사용자 메시지 중에서 LangGraph 정보가 있는 것 찾기
+        // 사용자 메시지만 필터링하여 검색 범위 축소
         const userMessages = conversation.messages.filter(msg => msg.role === 'user');
         
         for (const msg of userMessages) {
-          // keyword 필드에 JSON 형태의 LangGraph 상태가 있는지 확인
-          if (msg.keyword) {
-            try {
-              const keywordData = JSON.parse(msg.keyword);
-              // LangGraph 상태 객체인지 확인
-              if (keywordData && typeof keywordData === 'object' && keywordData.originalInput) {
-                firstQuestionMessage = msg;
-                console.log('JSON 형태의 LangGraph 상태가 있는 메시지 발견:', msg);
-                break;
-              }
-            } catch (e) {
-              // JSON 파싱 실패 시 일반 키워드로 간주
-            }
-          }
-          
-          // 일반적인 LangGraph 정보가 있는지 확인
+          // 간단한 조건부터 먼저 확인 (성능 최적화)
           if (msg.keyword || msg.db_search_title) {
+            // JSON 파싱은 필요한 경우에만 수행
+            if (msg.keyword && msg.keyword.startsWith('{')) {
+              try {
+                const keywordData = JSON.parse(msg.keyword);
+                if (keywordData && typeof keywordData === 'object' && keywordData.originalInput) {
+                  firstQuestionMessage = msg;
+                  console.log('JSON 형태의 LangGraph 상태가 있는 메시지 발견');
+                  break;
+                }
+              } catch (e) {
+                // JSON 파싱 실패 시 일반 키워드로 간주
+              }
+            }
+            
             firstQuestionMessage = msg;
-            console.log('일반 LangGraph 정보가 있는 메시지 발견:', msg);
+            console.log('일반 LangGraph 정보가 있는 메시지 발견');
             break;
           }
         }
       }
-      
-      console.log('검색 메시지 필터링 결과:', {
-        totalMessages: conversation.messages.length,
-        searchMessagesCount: searchMessages.length,
-        searchMessages: searchMessages.map(m => ({
-          id: m.id,
-          q_mode: m.q_mode,
-          question: m.question,
-          keyword: m.keyword,
-          db_search_title: m.db_search_title
-        }))
-      });
-      
-      // 모든 메시지의 q_mode 상태 확인
-      console.log('모든 메시지 상세 정보:');
-      conversation.messages.forEach((msg, index) => {
-        console.log(`  ${index + 1}. ID: ${msg.id}, q_mode: "${msg.q_mode}", role: "${msg.role}", question: "${msg.question?.substring(0, 30)}..."`);
-      });
       
       // LangGraph 복원할 메시지 결정
       const messageToRestore = searchMessages.length > 0 ? searchMessages[0] : firstQuestionMessage;
@@ -487,7 +494,7 @@ export default {
         // LangGraph 정보가 있는 메시지로 복원
         const firstSearchMessage = messageToRestore;
         
-        console.log('첫 번째 검색 메시지:', firstSearchMessage);
+        console.log('첫 번째 검색 메시지 복원:', firstSearchMessage.id);
         
         // 이미 첫 번째 질문이 완료된 대화이므로 상태 변경
         this.isFirstQuestionInSession = false;
@@ -495,18 +502,22 @@ export default {
         // 현재 표시된 LangGraph가 같은 대화의 것인지 확인
         if (this.showRangraph && this.currentStep >= 4 && this.originalInput === firstSearchMessage.question) {
           console.log('동일한 대화의 LangGraph가 이미 표시 중이므로 복원 생략');
+          // 캐시 정보 업데이트
+          this.lastRestoredConversationId = conversation.id;
+          this.lastRestoredMessageCount = conversation.messages.length;
+          this.isRestoringConversation = false;
           return;
         }
         
-        // 랭그래프 상태 설정
+        // 랭그래프 상태 설정 (대화 복원 시에는 즉시 완료 상태)
         this.showRangraph = true;
-        this.currentStep = 4; // 완료된 상태로 복원
+        this.currentStep = 4; // 완료된 상태로 복원 (실시간 애니메이션 없음)
         this.originalInput = firstSearchMessage.question;
         this.finalAnswer = firstSearchMessage.ans;
         this.extractedKeywords = firstSearchMessage.keyword;
         this.extractedDbSearchTitle = firstSearchMessage.db_search_title;
         
-        // LangGraph 전체 상태 복원
+        // LangGraph 전체 상태 복원 (비동기 처리)
         if (firstSearchMessage.keyword) {
           try {
             // keyword 필드에 저장된 LangGraph 상태 파싱
@@ -653,7 +664,14 @@ export default {
           this.currentStep = 0;
           this.resetRangraph();
         }
+        
+        // 캐시 정보 업데이트
+        this.lastRestoredConversationId = conversation.id;
+        this.lastRestoredMessageCount = conversation.messages.length;
       }
+      
+      // 대화 복원 완료
+      this.isRestoringConversation = false;
     },
     
     // 관련 대화에서 LangGraph 정보 찾아서 복원
@@ -790,6 +808,11 @@ export default {
     async newConversation() {
       console.log('🔄 새 대화 UI 초기화 시작...');
       
+      // 새 대화 상태 설정 (실시간 기능 활성화)
+      this.isNewConversation = true;
+      this.isFirstQuestionInSession = true;
+      this.isRestoringConversation = false;
+      
       // 즉시 UI 상태만 초기화 (백엔드는 실제 메시지 전송 시 생성)
       this.userInput = '';
       this.resetRangraphState();
@@ -799,10 +822,19 @@ export default {
       this.extractedKeywords = null;
       this.extractedDbSearchTitle = null;
       
+      // 캐시 초기화
+      this.lastRestoredConversationId = null;
+      this.lastRestoredMessageCount = 0;
+      
       // 현재 대화를 null로 설정하여 새 대화 상태로 만듦
       this.$store.commit('setCurrentConversation', null);
       
-      console.log('✅ 새 대화 UI 초기화 완료 (실제 대화는 첫 메시지 전송 시 생성)');
+      console.log('✅ 새 대화 UI 초기화 완료');
+      console.log('🔍 새 대화 상태:', {
+        isNewConversation: this.isNewConversation,
+        isFirstQuestionInSession: this.isFirstQuestionInSession,
+        isRestoringConversation: this.isRestoringConversation
+      });
       
       // DOM 업데이트
       this.$nextTick(() => {
@@ -878,8 +910,22 @@ export default {
         if (shouldRunRangraph) {
           // 첫 번째 질문: LangGraph 실행 + 상태 변경
           console.log('🔄 첫 번째 질문 - 랭그래프 실행');
-          this.isFirstQuestionInSession = false; // 첫 번째 질문 완료 후 상태 변경
+          console.log('🔍 실행 전 상태:', {
+            isNewConversation: this.isNewConversation,
+            isFirstQuestionInSession: this.isFirstQuestionInSession,
+            isRestoringConversation: this.isRestoringConversation
+          });
+          
           await this.executeRangraphFlow(messageText);
+          
+          // 첫 번째 질문 완료 후 상태 변경 (WebSocket 완료 후에 변경하도록 지연)
+          // 상태는 WebSocket 메시지 처리 완료 시점에 변경됨
+          
+          console.log('🔍 실행 후 상태:', {
+            isNewConversation: this.isNewConversation,
+            isFirstQuestionInSession: this.isFirstQuestionInSession,
+            isRestoringConversation: this.isRestoringConversation
+          });
         } else {
           // 이후 질문: 컨텍스트 재사용 (LangGraph UI 업데이트 없음)
           console.log('💬 추가 질문 - 컨텍스트 재사용 (LangGraph UI 업데이트 없음)');
@@ -1152,8 +1198,10 @@ export default {
             analysisImage: this.analysisImage
           };
           
-          // 대화 목록 새로고침
-          await this.$store.dispatch('fetchConversations');
+          // 대화 목록 새로고침 (조건부 - 새 대화인 경우에만)
+          if (!this.$store.state.currentConversation) {
+            await this.$store.dispatch('fetchConversations');
+          }
           
           // LangGraph 상태 복원
           this.showRangraph = currentLangGraphState.showRangraph;
@@ -1625,13 +1673,20 @@ export default {
       }
     },
     
-    // 랭그래프 플로우 실행
+    // 랭그래프 플로우 실행 (실시간 기능 보존)
     async executeRangraphFlow(inputText) {
       // 이미 실행 중인 경우 중복 실행 방지
       if (this.isLoading || this.isSearching) {
         console.log('이미 랭그래프가 실행 중입니다. 중복 실행 방지.');
         return;
       }
+      
+      console.log('🚀 executeRangraphFlow 시작:', inputText);
+      console.log('🔍 실시간 기능 상태:', {
+        isNewConversation: this.isNewConversation,
+        isFirstQuestionInSession: this.isFirstQuestionInSession,
+        isRestoringConversation: this.isRestoringConversation
+      });
       
       // 새 대화가 아닌 경우 기존 랭그래프를 히스토리에 저장
       if (this.showRangraph && this.currentStep >= 4) {
@@ -1672,14 +1727,30 @@ export default {
       try {
         console.log('LangGraph 실행 시작 - WebSocket 연결 시도...');
         
-        // WebSocket 연결 설정 (타임아웃 추가)
+        // WebSocket 연결 설정 (첫 번째 질문에서 실시간 기능 활성화)
         let websocketConnected = false;
-        try {
-          await this.setupWebSocket();
-          websocketConnected = true;
-          console.log('WebSocket 연결 완료 - LangGraph API 호출 시작...');
-        } catch (wsError) {
-          console.warn('WebSocket 연결 실패, API 응답으로 폴백:', wsError);
+        
+        console.log('🔍 WebSocket 연결 조건 확인:', {
+          isNewConversation: this.isNewConversation,
+          isFirstQuestionInSession: this.isFirstQuestionInSession,
+          isRestoringConversation: this.isRestoringConversation,
+          currentConversation: this.$store.state.currentConversation?.id || 'null',
+          shouldConnect: this.isFirstQuestionInSession && !this.isRestoringConversation
+        });
+        
+        // 첫 번째 질문이고 복원 중이 아닌 경우 실시간 기능 활성화
+        if (this.isFirstQuestionInSession && !this.isRestoringConversation) {
+          console.log('🎯 첫 번째 질문 감지 - 실시간 기능 활성화');
+          try {
+            await this.setupWebSocket();
+            websocketConnected = true;
+            console.log('✅ WebSocket 연결 완료 - LangGraph API 호출 시작...');
+          } catch (wsError) {
+            console.warn('⚠️ WebSocket 연결 실패, API 응답으로 폴백:', wsError);
+            websocketConnected = false;
+          }
+        } else {
+          console.log('🔄 추가 질문 또는 복원 상태 - 실시간 기능 비활성화, 직접 처리 모드');
           websocketConnected = false;
         }
         
@@ -1703,23 +1774,36 @@ export default {
         
         // WebSocket이 연결되어 있으면 실시간 업데이트 대기, 아니면 직접 처리
         if (websocketConnected && this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-          console.log('WebSocket 연결됨 - 실시간 업데이트 대기 중...');
+          console.log('🔗 WebSocket 연결됨 - 실시간 업데이트 대기 중...');
+          console.log('📊 WebSocket 상태:', {
+            readyState: this.websocket.readyState,
+            url: this.websocket.url,
+            protocol: this.websocket.protocol
+          });
           
           // WebSocket 타임아웃 설정 (30초)
           const websocketTimeout = setTimeout(() => {
-            console.warn('⚠️ WebSocket 타임아웃 - API 응답으로 폴백');
+            console.warn('⚠️ WebSocket 타임아웃 (30초) - API 응답으로 폴백');
             this.processDirectLangGraphResult(result);
           }, 30000);
           
           // WebSocket 메시지 수신 시 타임아웃 취소
           const originalHandler = this.handleWebSocketMessage;
           this.handleWebSocketMessage = (data) => {
+            console.log('📨 WebSocket 메시지 수신 - 타임아웃 취소');
             clearTimeout(websocketTimeout);
             this.handleWebSocketMessage = originalHandler;
             originalHandler.call(this, data);
           };
+          
+          console.log('⏳ WebSocket 실시간 업데이트 대기 시작...');
         } else {
-          console.log('WebSocket 연결 실패 - API 응답으로 직접 처리');
+          console.log('❌ WebSocket 연결 실패 - API 응답으로 직접 처리');
+          console.log('🔍 WebSocket 상태:', {
+            websocketConnected,
+            websocketExists: !!this.websocket,
+            readyState: this.websocket?.readyState || 'N/A'
+          });
           await this.processDirectLangGraphResult(result);
         }
         
@@ -1768,31 +1852,42 @@ export default {
               console.log('🔧 WebSocket 프로토콜:', this.websocket.protocol);
             }
           
-          // 연결 테스트 메시지 전송
-          try {
-            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-              this.websocket.send(JSON.stringify({
-                type: 'test',
-                message: 'WebSocket 연결 테스트'
-              }));
-              console.log('✅ WebSocket 테스트 메시지 전송됨');
+            // 연결 테스트 메시지 전송
+            try {
+              if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                this.websocket.send(JSON.stringify({
+                  type: 'test',
+                  message: 'WebSocket 연결 테스트'
+                }));
+                console.log('✅ WebSocket 테스트 메시지 전송됨');
+              }
+            } catch (error) {
+              console.error('❌ WebSocket 테스트 메시지 전송 실패:', error);
             }
-          } catch (error) {
-            console.error('❌ WebSocket 테스트 메시지 전송 실패:', error);
-          }
-          
-          resolve(); // 연결 성공 시 Promise 해결
-        };
+            
+            console.log('🎯 WebSocket 연결 완료 - 실시간 LangGraph 준비됨');
+            resolve(); // 연결 성공 시 Promise 해결
+          };
           
           this.websocket.onmessage = (event) => {
-            console.log('🔔 WebSocket 메시지 수신됨:', event.data);
+            console.log('🔔 WebSocket 메시지 수신됨!');
             console.log('🔔 메시지 타입:', typeof event.data);
             console.log('🔔 메시지 길이:', event.data?.length);
             console.log('🔔 원본 메시지 전체:', event.data);
+            
+            // 현재 상태 확인
+            console.log('🔍 메시지 수신 시 현재 상태:', {
+              isFirstQuestionInSession: this.isFirstQuestionInSession,
+              isRestoringConversation: this.isRestoringConversation,
+              currentStep: this.currentStep,
+              showRangraph: this.showRangraph
+            });
+            
             try {
               const data = JSON.parse(event.data);
               console.log('🔔 파싱된 데이터:', data);
               console.log('🔔 노드:', data.node, '상태:', data.status);
+              console.log('🎯 handleWebSocketMessage 호출 시작');
               this.handleWebSocketMessage(data);
             } catch (error) {
               console.error('❌ WebSocket 메시지 파싱 오류:', error);
@@ -1951,6 +2046,11 @@ export default {
         console.log('  - 키워드:', this.extractedKeywords);
         console.log('  - 문서제목:', this.extractedDbSearchTitle);
         
+        // 첫 번째 질문 완료 후 상태 변경 (실시간 처리 완료 시점)
+        this.isFirstQuestionInSession = false;
+        this.isNewConversation = false;
+        console.log('🎯 첫 번째 질문 실시간 처리 완료 - 상태 변경');
+        
         // 저장 함수 즉시 호출 (지연 제거)
         console.log('🔄 저장 함수 즉시 호출...');
         console.log('🔄 saveLangGraphMessageFromWebSocket 함수 호출 시작');
@@ -2000,12 +2100,42 @@ export default {
     
 
     
-    // 직접 LangGraph 결과 처리 (API 응답에서)
+    // 직접 LangGraph 결과 처리 (API 응답에서 - 실시간 기능 고려)
     async processDirectLangGraphResult(apiResult) {
       console.log('🔄 processDirectLangGraphResult 시작:', apiResult);
+      console.log('🔍 실시간 기능 상태:', {
+        isNewConversation: this.isNewConversation,
+        isFirstQuestionInSession: this.isFirstQuestionInSession,
+        isRestoringConversation: this.isRestoringConversation
+      });
       
       try {
         const result = apiResult.result;
+        
+        // 실시간 기능이 비활성화된 경우 (추가 질문 또는 복원) 즉시 완료 상태로 설정
+        if (!this.isFirstQuestionInSession || this.isRestoringConversation) {
+          console.log('🚀 실시간 기능 비활성화 - 즉시 완료 상태로 설정');
+          console.log('🔍 비활성화 이유:', {
+            isFirstQuestionInSession: this.isFirstQuestionInSession,
+            isRestoringConversation: this.isRestoringConversation
+          });
+          
+          this.currentStep = 4; // 완료 상태
+          this.isSearching = false;
+          this.isLoading = false;
+          
+          // 결과 데이터 직접 설정
+          if (result && result.response) {
+            this.finalAnswer = result.response.answer || '답변을 생성할 수 없습니다.';
+            this.extractedKeywords = result.response.keyword || null;
+            this.extractedDbSearchTitle = result.response.db_search_title || null;
+          }
+          
+          console.log('✅ 즉시 완료 처리됨');
+          return;
+        }
+        
+        console.log('🎬 첫 번째 질문 - 실시간 단계별 처리 시작');
         
         // 1단계: 초기화 완료
         this.currentStep = 1;
@@ -2290,10 +2420,12 @@ export default {
           console.log('✅ LangGraph 분석 결과가 성공적으로 저장되었습니다.');
           this.saveStatus = '';
           
-          // 대화 목록 새로고침
-          console.log('🔄 대화 목록 새로고침 중...');
-          await this.$store.dispatch('fetchConversations');
-          console.log('✅ 대화 목록 새로고침 완료');
+          // 대화 목록 새로고침 (조건부 - 새 대화인 경우에만)
+          if (!this.$store.state.currentConversation) {
+            console.log('🔄 대화 목록 새로고침 중...');
+            await this.$store.dispatch('fetchConversations');
+            console.log('✅ 대화 목록 새로고침 완료');
+          }
           
           // 화면에 즉시 반영되도록 강제 업데이트
           this.$nextTick(() => {
@@ -2413,8 +2545,10 @@ export default {
           const messageData = await response.json();
           console.log('LangGraph 메시지 저장 완료:', messageData);
           
-          // 대화 목록 새로고침
-          await this.$store.dispatch('fetchConversations');
+          // 대화 목록 새로고침 (조건부 - 새 대화인 경우에만)
+          if (!this.$store.state.currentConversation) {
+            await this.$store.dispatch('fetchConversations');
+          }
         } else {
           console.error('LangGraph 메시지 저장 실패:', response.status, response.statusText);
         }
@@ -2486,8 +2620,10 @@ LangGraph API 연결에 실패했습니다.
           const messageData = await response.json();
           console.log('폴백 메시지 저장 완료:', messageData);
           
-          // 대화 목록 새로고침
-          await this.$store.dispatch('fetchConversations');
+          // 대화 목록 새로고침 (조건부 - 새 대화인 경우에만)
+          if (!this.$store.state.currentConversation) {
+            await this.$store.dispatch('fetchConversations');
+          }
         } else {
           console.error('폴백 메시지 저장 실패:', response.status, response.statusText);
         }
@@ -2577,20 +2713,23 @@ LangGraph API 연결에 실패했습니다.
       // Store action 호출
       await this.$store.dispatch('submitFeedback', { messageId, feedback });
     },
-    // 스크롤 최적화 - 디바운스 적용
+    // 스크롤 최적화 - 통합된 쓰로틀링 적용
     scrollToBottom() {
-      if (this.scrollTimeout) {
-        clearTimeout(this.scrollTimeout);
+      // 이미 스크롤 요청이 대기 중이면 스킵
+      if (this.scrollPending) {
+        return;
       }
       
-      this.scrollTimeout = setTimeout(() => {
+      this.scrollPending = true;
+      
+      // requestAnimationFrame을 사용한 최적화된 스크롤
+      requestAnimationFrame(() => {
         if (this.$refs.chatMessages) {
           const scrollEl = this.$refs.chatMessages;
-          requestAnimationFrame(() => {
-            scrollEl.scrollTop = scrollEl.scrollHeight;
-          });
+          scrollEl.scrollTop = scrollEl.scrollHeight;
         }
-      }, 16); // 60fps에 맞춘 최적화
+        this.scrollPending = false;
+      });
     },
     copyToClipboard(text) {
       // 현대적인 Clipboard API 사용
@@ -2660,7 +2799,7 @@ LangGraph API 연결에 실패했습니다.
       if (scrollEl) {
         scrollEl.scrollTop = this.lastScrollPosition;
       }
-    },
+    }
   },
   beforeUnmount() {
     // WebSocket 연결 해제
@@ -2682,10 +2821,105 @@ LangGraph API 연결에 실패했습니다.
     });
   },
   updated() {
-    // 스크롤을 바로 조정하지 않고 DOM 업데이트 완료 후 조정
-    this.$nextTick(() => {
-      this.scrollToBottom();
-    });
+    // DOM 업데이트 완료 후 스크롤 조정 (통합된 쓰로틀링 사용)
+    this.scrollToBottom();
+  },
+  watch: {
+
+    // 입력 텍스트가 변경될 때마다 textarea 높이 조정
+    userInput() {
+      this.$nextTick(() => {
+        if (this.$refs.inputField) {
+          this.adjustTextareaHeight();
+        }
+      });
+    },
+    // 스트리밍 메시지가 업데이트될 때마다 스크롤을 아래로 이동 (최적화된 쓰로틀링)
+    '$store.state.streamingMessage'() {
+      this.scrollToBottom(); // 통합된 쓰로틀링 사용
+    },
+    // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원 (최적화)
+    '$store.state.currentConversation'(newConversation) {
+      // 메시지 캐시 업데이트
+      if (newConversation && newConversation.messages) {
+        this.cachedConversationId = newConversation.id;
+        this.cachedMessagesLength = newConversation.messages.length;
+        this.cachedMessages = newConversation.messages;
+      } else {
+        this.cachedMessages = null;
+        this.cachedConversationId = null;
+        this.cachedMessagesLength = 0;
+      }
+      
+      // 기존 대화 선택 시 실시간 기능 비활성화
+      if (this.$store.state.conversationRestored) {
+        this.isNewConversation = false;
+        this.isFirstQuestionInSession = false;
+        this.$store.commit('setConversationRestored', false); // 플래그 리셋
+      }
+      
+      // 스크롤과 랭그래프 복원을 비동기로 처리하여 UI 블로킹 방지
+      this.$nextTick(() => {
+        this.scrollToBottom();
+        
+        // 랭그래프 복원 로직 (비동기)
+        if (newConversation && newConversation.messages) {
+          console.log('currentConversation 변경으로 인한 랭그래프 복원 시작');
+          // 비동기 처리로 UI 블로킹 방지
+          setTimeout(() => {
+            this.restoreRangraphFromConversation(newConversation);
+          }, 0);
+        }
+      });
+    },
+    // shouldScrollToBottom 상태가 true로 변경될 때 스크롤을 맨 아래로 이동 (최적화)
+    '$store.state.shouldScrollToBottom'(newValue) {
+      if (newValue) {
+        this.scrollToBottom(); // 통합된 쓰로틀링 사용
+        this.$store.commit('setShouldScrollToBottom', false);
+      }
+    },
+    // 스트리밍 상태 변경 워처 (최적화된 ResizeObserver)
+    '$store.state.isStreaming'(newValue) {
+      if (newValue) {
+        // 스트리밍 시작 시
+        this.$nextTick(() => {
+          this.streamingVisible = true;
+          
+          if (this.$refs.streamingText) {
+            // 최적화된 ResizeObserver - 쓰로틀링 통합
+            if (!this.observer) {
+              this.observer = new ResizeObserver(() => {
+                this.scrollToBottom(); // 통합된 쓰로틀링 사용
+              });
+            }
+            this.observer.observe(this.$refs.streamingText);
+          }
+        });
+      } else {
+        // 스트리밍 종료 시
+        this.streamingVisible = false;
+        
+        // observer 정리
+        if (this.observer) {
+          this.observer.disconnect();
+          this.observer = null;
+        }
+        
+        // 스트리밍 완료 후 스크롤 조정
+        this.scrollToBottom(); // 통합된 쓰로틀링 사용
+      }
+    },
+    // 피드백 업데이트 트리거 감시
+    '$store.state._feedbackUpdateTrigger'() {
+      // 피드백 변경 시 자연스러운 반응성 보장 (강제 업데이트 제거)
+    },
+    // 새 대화 생성 트리거 감시
+    '$store.state._newConversationTrigger'() {
+      // 새 대화 생성 시 랭그래프 상태 초기화
+      this.resetRangraphState();
+    }
+
   },
   beforeDestroy() {
     // 메모리 누수 방지를 위한 정리 작업
@@ -2707,99 +2941,6 @@ LangGraph API 연결에 실패했습니다.
     }
     
     console.log('🧹 Home 컴포넌트 정리 완료');
-  },
-  watch: {
-
-    // 입력 텍스트가 변경될 때마다 textarea 높이 조정
-    userInput() {
-      this.$nextTick(() => {
-        if (this.$refs.inputField) {
-          this.adjustTextareaHeight();
-        }
-      });
-    },
-    // 스트리밍 메시지가 업데이트될 때마다 스크롤을 아래로 이동
-    '$store.state.streamingMessage'() {
-      if (!this.scrollThrottled) {
-        this.scrollThrottled = true;
-        requestAnimationFrame(() => {
-          this.scrollToBottom();
-          this.scrollThrottled = false;
-        });
-      }
-    },
-    // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원
-    '$store.state.currentConversation'() {
-      this.$nextTick(() => {
-        this.scrollToBottom();
-      });
-      
-      // 랭그래프 복원 로직 추가
-      const currentConversation = this.$store.state.currentConversation;
-      if (currentConversation && currentConversation.messages) {
-        console.log('currentConversation 변경으로 인한 랭그래프 복원 시작');
-        this.restoreRangraphFromConversation(currentConversation);
-      }
-    },
-    // shouldScrollToBottom 상태가 true로 변경될 때 스크롤을 맨 아래로 이동
-    '$store.state.shouldScrollToBottom'(newValue) {
-      if (newValue) {
-        this.$nextTick(() => {
-          this.scrollToBottom();
-          this.$store.commit('setShouldScrollToBottom', false);
-        });
-      }
-    },
-    // Add a new watcher to observe the streaming element's size
-    '$store.state.isStreaming'(newValue) {
-      if (newValue) {
-        // 스트리밍 시작 시 타이머 설정
-        this.$nextTick(() => {
-          // 스트리밍 메시지 즉시 표시 (성능 최적화)
-          this.streamingVisible = true;
-          
-          if (this.$refs.streamingText) {
-            // Observer setup to track streaming message size changes (최적화)
-            if (!this.observer) {
-              this.observer = new ResizeObserver(() => {
-                if (!this.scrollThrottled) {
-                  this.scrollThrottled = true;
-                  requestAnimationFrame(() => {
-                    this.scrollToBottom();
-                    this.scrollThrottled = false;
-                  });
-                }
-              });
-            }
-            this.observer.observe(this.$refs.streamingText);
-          }
-        });
-      } else {
-        // 스트리밍 종료 시
-        this.streamingVisible = false;
-        
-        // observer 정리
-        if (this.observer) {
-          this.observer.disconnect();
-          this.observer = null;
-        }
-        
-        // 스트리밍 완료 후 스크롤 조정
-        this.$nextTick(() => {
-          this.scrollToBottom();
-        });
-      }
-    },
-    // 피드백 업데이트 트리거 감시
-    '$store.state._feedbackUpdateTrigger'() {
-      // 피드백 변경 시 자연스러운 반응성 보장 (강제 업데이트 제거)
-    },
-    // 새 대화 생성 트리거 감시
-    '$store.state._newConversationTrigger'() {
-      // 새 대화 생성 시 랭그래프 상태 초기화
-      this.resetRangraphState();
-    },
-
   }
 };
 </script>
