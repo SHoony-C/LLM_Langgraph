@@ -363,7 +363,8 @@ const store = createStore({
       streamingMessage: '',
       shouldScrollToBottom: false,
       conversationRestored: false, // 대화 복원 상태
-      _feedbackUpdateTrigger: 0 // 피드백 업데이트 강제 반응성 트리거
+      _feedbackUpdateTrigger: 0, // 피드백 업데이트 강제 반응성 트리거
+      loginNewConversation: false // 로그인 후 새 대화창 플래그
     }
   },
   mutations: {
@@ -553,6 +554,7 @@ const store = createStore({
       state.token = '';
       state.user = null;
       state.isAuthenticated = false;
+      state.loginNewConversation = false; // 인증 정리 시 플래그 리셋
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user');
       localStorage.removeItem('access_token');
@@ -585,6 +587,9 @@ const store = createStore({
     },
     setConversationRestored(state, value) {
       state.conversationRestored = value;
+    },
+    setLoginNewConversation(state, value) {
+      state.loginNewConversation = value;
     },
     setLlamaApiSettings(state, { apiKey, apiBase, apiEndpoint }) {
       state.llamaApiKey = apiKey;
@@ -672,8 +677,10 @@ const store = createStore({
         user: userData
       });
       
+      // 로그인 후 새 대화창 상태로 초기화
       commit('setConversations', []);
       commit('setCurrentConversation', null);
+      commit('setLoginNewConversation', true); // 로그인 후 새 대화창 플래그 설정
       await dispatch('fetchConversations');
       
       return true;
@@ -683,6 +690,7 @@ const store = createStore({
       commit('clearAuth');
       commit('setConversations', []);
       commit('setCurrentConversation', null);
+      commit('setLoginNewConversation', false); // 로그아웃 시 플래그 리셋
       
       // OAuth 플래그 초기화
       resetOAuthFlags();

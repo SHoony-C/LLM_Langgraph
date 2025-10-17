@@ -2819,6 +2819,14 @@ LangGraph API 연결에 실패했습니다.
       this.adjustTextareaHeight(); // 초기 높이 설정
 // 텍스트 선택은 CSS에서 처리됨
     });
+    
+    // 로그인 후 새 대화창 상태 확인
+    if (this.$store.state.loginNewConversation) {
+      console.log('🔄 로그인 후 새 대화창 초기화 시작...');
+      this.newConversation();
+      this.$store.commit('setLoginNewConversation', false); // 플래그 리셋
+      console.log('✅ 로그인 후 새 대화창 초기화 완료');
+    }
   },
   updated() {
     // DOM 업데이트 완료 후 스크롤 조정 (통합된 쓰로틀링 사용)
