@@ -4,7 +4,7 @@ from typing import List, Optional, Dict
 from ..database import get_db
 from ..models import Conversation, Message, User
 from ..schemas import Conversation as ConversationSchema
-from ..schemas import ConversationCreate, MessageRequest, MessageResponse
+from ..schemas import ConversationCreate, MessageRequest, MessageResponse, FeedbackRequest
 from ..utils.auth import get_current_user
 from .llm import get_llm_response
 
@@ -108,8 +108,11 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
     if not current_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # 사용자의 모든 대화 가져오기
-    conversations = db.query(Conversation).filter(Conversation.user_id == current_user.id).order_by(Conversation.created_at.desc()).all()
+    # 사용자의 모든 대화 가져오기 (삭제되지 않은 것만)
+    conversations = db.query(Conversation).filter(
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
+    ).order_by(Conversation.created_at.desc()).all()
     
     # 각 대화에 요약 정보 추가
     result = []
@@ -118,6 +121,7 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
         conv_dict = {
             "id": conversation.id,
             "created_at": conversation.created_at,
+            "last_updated": conversation.last_updated,
             "messages": []
         }
         
@@ -134,7 +138,8 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 "user_name": message.user_name,
                 "q_mode": message.q_mode,  # 랭그래프 모드 추가
                 "keyword": message.keyword,  # 키워드 추가
-                "db_search_title": message.db_search_title  # 문서 검색 타이틀 추가
+                "db_search_title": message.db_search_title,  # 문서 검색 타이틀 추가
+                "image": message.image  # 이미지 URL 추가
             }
             conv_dict["messages"].append(user_message)
             
@@ -150,7 +155,8 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                     "created_at": message.created_at,
                     "q_mode": message.q_mode,  # 랭그래프 모드 추가
                     "keyword": message.keyword,  # 키워드 추가
-                    "db_search_title": message.db_search_title  # 문서 검색 타이틀 추가
+                    "db_search_title": message.db_search_title,  # 문서 검색 타이틀 추가
+                    "image": message.image  # 이미지 URL 추가
                 }
                 conv_dict["messages"].append(assistant_message)
         
@@ -159,9 +165,17 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
         if has_langgraph:
             print(f"[CONVERSATION] 📊 대화 {conversation.id}: LangGraph 정보 포함")
         
-        # 요약 정보 추가
+        # 타이틀 및 아이콘 정보 추가
+        if conversation.title and conversation.title != "New Conversation":
+            # DB에 저장된 타이틀 사용
+            conv_dict["title"] = conversation.title
+        else:
+            # 동적으로 타이틀 생성
+            summary_info = get_conversation_summary(conversation, db)
+            conv_dict["title"] = summary_info["title"]
+        
+        # 아이콘 타입은 항상 동적으로 생성
         summary_info = get_conversation_summary(conversation, db)
-        conv_dict["title"] = summary_info["title"]
         conv_dict["icon_type"] = summary_info["icon_type"]
         
         result.append(conv_dict)
@@ -180,20 +194,18 @@ def create_conversation(db: Session = Depends(get_db), current_user: User = Depe
 
 @router.delete("/conversations/{conversation_id}")
 def delete_conversation(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete a conversation and all its messages"""
-    # Check if conversation exists and belongs to current user
+    """논리적으로 대화를 삭제 (is_deleted=1로 설정)"""
+    # Check if conversation exists and belongs to current user (삭제되지 않은 것만)
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
     ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Delete all messages in the conversation
-    db.query(Message).filter(Message.conversation_id == conversation_id).delete()
-    
-    # Delete the conversation
-    db.delete(conversation)
+    # 논리적 삭제: is_deleted를 True로 설정
+    conversation.is_deleted = True
     db.commit()
     
     return {"success": True, "message": f"Conversation {conversation_id} deleted"}
@@ -206,10 +218,11 @@ async def create_message(
     current_user: User = Depends(get_current_user)
 ):
     """Send a message to a conversation and get AI response"""
-    # Check if conversation exists and belongs to current user
+    # Check if conversation exists and belongs to current user (삭제되지 않은 것만)
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
     ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -264,14 +277,29 @@ async def create_message(
         user_name=user_name,
         q_mode=message_request.q_mode,
         keyword=message_request.keyword,
-        db_search_title=message_request.db_search_title
+        db_search_title=message_request.db_search_title,
+        image=message_request.image
     )
     
     try:
         db.add(message)
+        
+        # 대화의 last_updated 시간 업데이트
+        from datetime import datetime
+        conversation.last_updated = datetime.utcnow()
+        
+        # 대화에 첫 번째 메시지인 경우 타이틀 설정
+        if not conversation.title or conversation.title == "New Conversation":
+            title = message_request.question[:50]
+            if len(message_request.question) > 50:
+                title += "..."
+            conversation.title = title
+            print(f"[MESSAGE] 📝 대화 타이틀 설정: {title}")
+        
         db.commit()
         db.refresh(message)
-        print(f"[MESSAGE] ✅ 메시지 저장 완료. ID: {message.id}")
+        db.refresh(conversation)
+        print(f"[MESSAGE] ✅ 메시지 저장 및 대화 업데이트 완료. ID: {message.id}")
     except Exception as e:
         print(f"[MESSAGE] ❌ 저장 오류: {str(e)}")
         db.rollback()
@@ -289,10 +317,11 @@ def find_related_conversations(
     current_user: User = Depends(get_current_user)
 ):
     """추가 질문 대화에서 원본 LangGraph 정보가 있는 관련 대화 찾기"""
-    # 현재 대화 확인
+    # 현재 대화 확인 (삭제되지 않은 것만)
     current_conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
     ).first()
     
     if not current_conversation:
@@ -318,10 +347,11 @@ def find_related_conversations(
     if not all_add_messages:
         return {"related_conversation": None, "message": "Current conversation is not an add-only conversation"}
     
-    # 사용자의 다른 대화들을 시간순으로 검색 (최근 것부터)
+    # 사용자의 다른 대화들을 시간순으로 검색 (최근 것부터, 삭제되지 않은 것만)
     other_conversations = db.query(Conversation).filter(
         Conversation.user_id == current_user.id,
-        Conversation.id != conversation_id
+        Conversation.id != conversation_id,
+        Conversation.is_deleted == False
     ).order_by(Conversation.created_at.desc()).all()
     
     # 각 대화에서 LangGraph 정보가 있는 메시지 찾기
@@ -349,7 +379,8 @@ def find_related_conversations(
                         "user_name": msg.user_name,
                         "q_mode": msg.q_mode,
                         "keyword": msg.keyword,
-                        "db_search_title": msg.db_search_title
+                        "db_search_title": msg.db_search_title,
+                        "image": msg.image
                     }
                     conv_dict["messages"].append(user_message)
                     
@@ -365,7 +396,8 @@ def find_related_conversations(
                             "created_at": msg.created_at,
                             "q_mode": msg.q_mode,
                             "keyword": msg.keyword,
-                            "db_search_title": msg.db_search_title
+                            "db_search_title": msg.db_search_title,
+                            "image": msg.image
                         }
                         conv_dict["messages"].append(assistant_message)
                 
@@ -384,10 +416,11 @@ def save_stream_message(
     current_user: User = Depends(get_current_user)
 ):
     """스트리밍으로 받은 메시지를 저장"""
-    # 대화가 존재하고 현재 사용자에게 속하는지 확인
+    # 대화가 존재하고 현재 사용자에게 속하는지 확인 (삭제되지 않은 것만)
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
     ).first()
     
     if not conversation:
@@ -409,11 +442,101 @@ def save_stream_message(
         ans=message_request.assistant_response or "",
         user_name=user_name  # 검증된 사용자명 사용
     )
+    
+    # 대화의 last_updated 시간 업데이트
+    from datetime import datetime
+    conversation.last_updated = datetime.utcnow()
+    
+    # 대화에 첫 번째 메시지인 경우 타이틀 설정
+    if not conversation.title or conversation.title == "New Conversation":
+        title = message_request.question[:50]
+        if len(message_request.question) > 50:
+            title += "..."
+        conversation.title = title
+        print(f"[STREAM] 📝 대화 타이틀 설정: {title}")
+    
     db.add(message)
     db.commit()
     db.refresh(message)
+    db.refresh(conversation)
     
     return MessageResponse(
         userMessage=message,
         assistantMessage=message
-    ) 
+    )
+
+@router.put("/conversations/{conversation_id}")
+def update_conversation_title(
+    conversation_id: int,
+    title_request: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """대화 제목 업데이트"""
+    # 대화가 존재하고 현재 사용자에게 속하는지 확인
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # 제목 업데이트
+    new_title = title_request.get('title', '').strip()
+    if new_title:
+        conversation.title = new_title
+        from datetime import datetime
+        conversation.last_updated = datetime.utcnow()
+        
+        try:
+            db.commit()
+            db.refresh(conversation)
+            print(f"[CONVERSATION] ✅ 대화 제목 업데이트 완료: {new_title}")
+            return {"message": "Title updated successfully", "title": new_title}
+        except Exception as e:
+            print(f"[CONVERSATION] ❌ 제목 업데이트 오류: {str(e)}")
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"제목 업데이트 오류: {str(e)}")
+    else:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+
+@router.post("/messages/{message_id}/feedback")
+def update_message_feedback(
+    message_id: int,
+    feedback_request: FeedbackRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """메시지에 피드백 업데이트"""
+    # 메시지가 존재하고 현재 사용자의 대화에 속하는지 확인
+    message = db.query(Message).join(Conversation).filter(
+        Message.id == message_id,
+        Conversation.user_id == current_user.id
+    ).first()
+    
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # 피드백 값 검증 (positive, negative, 또는 null만 허용)
+    if feedback_request.feedback not in [None, "positive", "negative"]:
+        raise HTTPException(status_code=400, detail="Invalid feedback value. Must be 'positive', 'negative', or null")
+    
+    # 피드백 업데이트
+    message.feedback = feedback_request.feedback
+    
+    try:
+        db.commit()
+        db.refresh(message)
+        print(f"[FEEDBACK] ✅ 메시지 {message_id} 피드백 업데이트: {feedback_request.feedback}")
+    except Exception as e:
+        print(f"[FEEDBACK] ❌ 피드백 업데이트 오류: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"피드백 업데이트 오류: {str(e)}")
+    
+    return {
+        "success": True,
+        "message": "Feedback updated successfully",
+        "feedback": message.feedback
+    } 

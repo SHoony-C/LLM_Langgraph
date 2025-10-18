@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from app.routes import conversations, llm, auth, websocket
+from app.routes import conversations, llm, auth
 from app.database import Base, engine
 
 # Create database tables
@@ -37,20 +37,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 # messages router 제거됨 - conversations에서 처리
 app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
-app.include_router(websocket.router, tags=["websocket"])
-
-# WebSocket Redis 리스너 시작/중지
-@app.on_event("startup")
-async def startup_event():
-    """애플리케이션 시작 시 Redis 리스너 시작"""
-    print("🚀 애플리케이션 시작 - Redis 리스너 초기화 중...")
-    await websocket.start_redis_listener()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """애플리케이션 종료 시 Redis 리스너 중지"""
-    print("🛑 애플리케이션 종료 - Redis 리스너 정리 중...")
-    await websocket.stop_redis_listener()
+# WebSocket 제거됨 - SSE 방식 사용
 
 @app.get("/")
 def read_root():

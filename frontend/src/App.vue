@@ -126,49 +126,7 @@
       </router-view>
     </main>
     
-    <!-- API Key Modal -->
-    <div class="modal-overlay" v-if="showApiKeyModal" @click.self="showApiKeyModal = false">
-      <div class="modal-container">
-        <div class="modal-header">
-          <h3>Set OpenAI API Key</h3>
-          <button class="close-btn" @click="showApiKeyModal = false">×</button>
-        </div>
-        <div class="modal-body">
-          <p class="api-key-info">Your API key is stored locally in your browser and sent directly to the API. We never store your API key on our servers.</p>
-          
-          <div class="form-group">
-            <label for="apiKey">OpenAI API Key</label>
-            <input 
-              type="text" 
-              id="apiKey" 
-              v-model="apiKeyInput" 
-              placeholder="sk-..." 
-              :class="{ 'error': $store.state.apiKeyError }"
-            />
-            <p class="error-message" v-if="$store.state.apiKeyError">{{ $store.state.apiKeyError }}</p>
-            <p class="api-key-status" v-if="$store.state.apiKeySet && !$store.state.apiKeyError">
-              <svg class="check-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              API Key is set
-            </p>
-          </div>
-          
-          <p class="api-key-help">
-            Don't have an API key? <a href="https://platform.openai.com/account/api-keys" target="_blank">Get one from OpenAI</a>
-          </p>
-        </div>
-        <div class="modal-footer">
-          <button class="cancel-btn" @click="showApiKeyModal = false">Cancel</button>
-          <button 
-            class="save-btn" 
-            @click="saveApiKey" 
-            :disabled="!apiKeyInput.trim().startsWith('sk-')">
-            Save API Key
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- OpenAI API Key 모달 제거됨 - 서버 .env에서 관리 -->
 
     <!-- Custom Llama API Modal -->
     <div class="modal-overlay" v-if="showLlamaApiModal" @click.self="showLlamaApiModal = false">
@@ -236,9 +194,7 @@ export default {
       isDarkMode: true,
       isSidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true' || false,
       isUserPopupOpen: false,
-      showApiKeyModal: false,
       showLlamaApiModal: false,
-      apiKeyInput: '',
       llamaApiKeyInput: '',
       llamaApiBaseInput: '',
       llamaApiEndpointInput: '',
@@ -363,17 +319,7 @@ export default {
         }, 500);
       }
     },
-    async saveApiKey() {
-      if (!this.apiKeyInput.trim().startsWith('sk-')) {
-        this.$store.commit('setApiKeyError', 'Invalid API key format. It should start with "sk-"');
-        return;
-      }
-      
-      const result = await this.$store.dispatch('updateApiKey', this.apiKeyInput.trim());
-      if (result.success) {
-        this.showApiKeyModal = false;
-      }
-    },
+    // OpenAI API Key 관련 메서드 제거됨 - 서버 .env에서 관리
     deleteConversation(conversationId) {
       if (confirm('Are you sure you want to delete this conversation?')) {
         this.$store.dispatch('deleteConversation', conversationId);
@@ -576,7 +522,7 @@ export default {
       `;
       document.head.appendChild(style);
       
-      console.log('✅ 복사 기능이 완전히 활성화되었습니다. Ctrl+C로 텍스트를 복사할 수 있습니다.');
+      // console.log('✅ 복사 기능이 완전히 활성화되었습니다. Ctrl+C로 텍스트를 복사할 수 있습니다.');
     },
     handleSSOCallback() {
       // URL에서 토큰 파라미터 확인 (백엔드 /acs에서 리다이렉트된 경우)
@@ -620,6 +566,9 @@ export default {
             id: userid || loginid || user // userid가 있으면 사용, 없으면 loginid, 없으면 username 사용
           } 
         });
+        
+        // 로그인 후 새 대화 플래그 설정
+        this.$store.commit('setLoginNewConversation', true);
         
         // 사용자 정보가 제대로 설정되었는지 확인하고, 필요시 백엔드에서 새로 가져오기
         setTimeout(() => {
@@ -710,6 +659,9 @@ export default {
               user: data.user
             });
             
+            // 로그인 후 새 대화 플래그 설정
+            this.$store.commit('setLoginNewConversation', true);
+            
             // URL 해시 정리
             const url = new URL(window.location);
             url.hash = '';
@@ -780,6 +732,9 @@ export default {
                 user: data.user
               });
 
+              // 로그인 후 새 대화 플래그 설정
+              this.$store.commit('setLoginNewConversation', true);
+
               const url = new URL(window.location);
               url.search = '';
               window.history.replaceState({}, document.title, url);
@@ -830,6 +785,9 @@ export default {
           token: accessToken,
           user: userInfo
         });
+        
+        // 로그인 후 새 대화 플래그 설정
+        this.$store.commit('setLoginNewConversation', true);
         
         // 대화 목록 가져오기
         this.$store.dispatch('fetchConversations');

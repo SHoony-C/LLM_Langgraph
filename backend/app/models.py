@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Enum, DateTime
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Enum, DateTime, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -24,6 +24,7 @@ class Conversation(Base):
     title = Column(String(255), nullable=True)  # 대화 제목
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_updated = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    is_deleted = Column(Boolean, default=False, nullable=False)  # 논리적 삭제 플래그
     
     # 사용자 관계 추가
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -44,6 +45,7 @@ class Message(Base):
     q_mode = Column(Enum("search", "add", name="q_mode_enum"), nullable=True)  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword = Column(Text, nullable=True)  # 키워드 정보 저장
     db_search_title = Column(Text, nullable=True)  # 랭체인에서 찾은 문서 타이틀 저장
+    image = Column(Text, nullable=True)  # 이미지 URL 저장
     feedback = Column(Enum("positive", "negative", name="feedback_enum"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     

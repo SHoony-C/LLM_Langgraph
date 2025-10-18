@@ -8,14 +8,13 @@ from fastapi import APIRouter, HTTPException, Response, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import redis.asyncio as aioredis
 from langgraph.graph import END, StateGraph
 from collections import defaultdict
 from qdrant_client import QdrantClient
 from app.utils.config import (
-    OPENAI_API_KEY,
-    REDIS_HOST, REDIS_PORT, REDIS_CHANNEL,
-    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION
+    OPENAI_API_KEY, OPENAI_BASE_URL,
+    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION,
+    IMAGE_BASE_URL, IMAGE_PATH_PREFIX
 )
 from app.database import get_db
 from app.models import Conversation, Message
@@ -26,132 +25,200 @@ from datetime import datetime
 # Create router 
 router = APIRouter()
 
-# Redis 비동기 클라이언트 초기화
-try:
-    redis_client = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-    print(f"[Redis] Redis 클라이언트 초기화 완료: {REDIS_HOST}:{REDIS_PORT}")
-except Exception as e:
-    print(f"[Redis] Redis 클라이언트 초기화 실패: {e}")
-    redis_client = None
+# Redis 제거됨 - SSE 방식 사용
 
 # 환경 변수 로딩 확인
 print(f"[Config] OpenAI API Key: {'설정됨' if OPENAI_API_KEY else '설정되지 않음'}")
 print(f"[Config] Qdrant: {QDRANT_HOST}:{QDRANT_PORT} (컬렉션: {QDRANT_COLLECTION or '설정되지 않음'})")
 
-# 임베딩 모델 (10차원 벡터 생성)
-class SimpleEmbeddings:
+# 직접 구현한 텍스트 유사도 계산 클래스
+class DirectSimilarityCalculator:
     def __init__(self):
-        self.dimension = 10  # Qdrant 컬렉션 차원에 맞춤
-        self.api_key = OPENAI_API_KEY
+        self.stopwords = {'은', '는', '이', '가', '을', '를', '에', '에서', '와', '과', '의', '로', '으로', '한', '하는', '하다', '있다', '없다', '그', '그것', '이것', '저것'}
         
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """10차원 벡터 생성 (Qdrant 컬렉션에 맞춤)"""
-        try:
-            embeddings = []
-            for text in texts:
-                # 간단한 해시 기반 10차원 벡터 생성
-                import hashlib
-                import struct
-                
-                # 텍스트를 해시로 변환
-                text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
-                
-                # 해시를 10개의 float로 변환
-                vector = []
-                for i in range(0, 40, 4):  # MD5는 32바이트, 4바이트씩 8개 그룹
-                    if i + 4 <= len(text_hash):
-                        hex_group = text_hash[i:i+4]
-                        # 16진수를 float로 변환 (0-1 범위로 정규화)
-                        float_val = float(int(hex_group, 16)) / 65535.0
-                        vector.append(float_val)
-                
-                # 10차원이 되도록 패딩 또는 자르기
-                while len(vector) < 10:
-                    vector.append(0.0)
-                vector = vector[:10]
-                
-                embeddings.append(vector)
-                
-            print(f"[Embeddings] {len(texts)}개 텍스트에 대해 {self.dimension}차원 벡터 생성 완료")
-            return embeddings
+    def preprocess_text(self, text: str) -> List[str]:
+        """텍스트 전처리 및 토큰화"""
+        import re
+        # 특수문자 제거 및 소문자 변환
+        text = re.sub(r'[^가-힣a-zA-Z0-9\s]', ' ', text.lower())
+        # 토큰화
+        tokens = text.split()
+        # 불용어 제거 및 길이 2 이상 토큰만 유지
+        tokens = [token for token in tokens if token not in self.stopwords and len(token) >= 2]
+        return tokens
+    
+    def calculate_jaccard_similarity(self, text1: str, text2: str) -> float:
+        """자카드 유사도 계산"""
+        tokens1 = set(self.preprocess_text(text1))
+        tokens2 = set(self.preprocess_text(text2))
+        
+        if not tokens1 and not tokens2:
+            return 1.0
+        if not tokens1 or not tokens2:
+            return 0.0
             
-        except Exception as e:
-            print(f"[Embeddings] 벡터 생성 오류: {e}")
-            # 오류 시 기본 10차원 벡터 반환
-            return [[0.0] * self.dimension for _ in texts]
-
-# 벡터 DB 검색 함수들
-async def rag_multivector(question_type: str, limit: int, queries: List[str], query_vectors: List[List[float]], 
-                          ip: str, port: int, collection: str) -> List[dict]:
-    """멀티벡터 검색 (Qdrant)"""
-    try:
-        print(f"[RAG] Qdrant 연결 시도: {ip}:{port}, 컬렉션: {collection}")
+        intersection = len(tokens1.intersection(tokens2))
+        union = len(tokens1.union(tokens2))
         
-        # 벡터 DB 연결 시도
+        return intersection / union if union > 0 else 0.0
+    
+    def calculate_cosine_similarity(self, text1: str, text2: str) -> float:
+        """코사인 유사도 계산 (TF 기반)"""
+        tokens1 = self.preprocess_text(text1)
+        tokens2 = self.preprocess_text(text2)
+        
+        # TF 계산
+        tf1 = {}
+        tf2 = {}
+        
+        for token in tokens1:
+            tf1[token] = tf1.get(token, 0) + 1
+        for token in tokens2:
+            tf2[token] = tf2.get(token, 0) + 1
+        
+        # 전체 단어 집합
+        all_tokens = set(tokens1 + tokens2)
+        
+        if not all_tokens:
+            return 1.0
+        
+        # 벡터 생성
+        vector1 = [tf1.get(token, 0) for token in all_tokens]
+        vector2 = [tf2.get(token, 0) for token in all_tokens]
+        
+        # 코사인 유사도 계산
+        dot_product = sum(a * b for a, b in zip(vector1, vector2))
+        magnitude1 = sum(a * a for a in vector1) ** 0.5
+        magnitude2 = sum(b * b for b in vector2) ** 0.5
+        
+        if magnitude1 == 0 or magnitude2 == 0:
+            return 0.0
+            
+        return dot_product / (magnitude1 * magnitude2)
+    
+    def calculate_combined_similarity(self, text1: str, text2: str) -> float:
+        """자카드와 코사인 유사도를 결합한 최종 유사도"""
+        jaccard_sim = self.calculate_jaccard_similarity(text1, text2)
+        cosine_sim = self.calculate_cosine_similarity(text1, text2)
+        
+        # 가중 평균 (자카드 0.4, 코사인 0.6)
+        combined_sim = (jaccard_sim * 0.4) + (cosine_sim * 0.6)
+        return combined_sim
+    
+    def find_similar_documents(self, query: str, documents: List[dict], top_k: int = 5) -> List[dict]:
+        """쿼리와 유사한 문서들을 찾아 반환"""
+        results = []
+        
+        for doc in documents:
+            # 문서 텍스트 추출 (제목 + 내용)
+            doc_title = doc.get('ppt_title', '')
+            doc_content = doc.get('ppt_content', doc.get('ppt_summary', ''))
+            doc_text = f"{doc_title} {doc_content}"
+            
+            # 유사도 계산
+            similarity = self.calculate_combined_similarity(query, doc_text)
+            
+            results.append({
+                'document': doc,
+                'similarity': similarity,
+                'matched_text': doc_text[:200] + '...' if len(doc_text) > 200 else doc_text
+            })
+        
+        # 유사도 순으로 정렬하여 상위 k개 반환
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        return results[:top_k]
+
+# 직접 구현한 문서 검색 함수
+async def direct_document_search(question_type: str, limit: int, queries: List[str], 
+                               ip: str, port: int, collection: str) -> List[dict]:
+    """직접 구현한 문서 검색 (유사도 기반)"""
+    try:
+        print(f"[DIRECT_SEARCH] 직접 검색 시작: {len(queries)}개 쿼리")
+        
+        # Qdrant에서 모든 문서 가져오기
         client = QdrantClient(host=ip, port=port)
         
         # 컬렉션 존재 확인
         try:
             collections = client.get_collections()
-            print(f"[RAG] 사용 가능한 컬렉션: {[col.name for col in collections.collections]}")
+            print(f"[DIRECT_SEARCH] 사용 가능한 컬렉션: {[col.name for col in collections.collections]}")
             
-            if not collection:
-                print(f"[RAG] 컬렉션이 설정되지 않았습니다.")
+            if not collection or collection not in [col.name for col in collections.collections]:
+                print(f"[DIRECT_SEARCH] 컬렉션 '{collection}' 사용 불가")
                 return []
                 
-            if collection not in [col.name for col in collections.collections]:
-                print(f"[RAG] 컬렉션 '{collection}'이 존재하지 않습니다.")
-                return []
-                
-            print(f"[RAG] 컬렉션 '{collection}' 연결 성공")
-            
         except Exception as e:
-            print(f"[RAG] Qdrant 컬렉션 확인 오류: {e}")
+            print(f"[DIRECT_SEARCH] Qdrant 연결 오류: {e}")
             return []
         
-        results = []
-        for i, (query, vector) in enumerate(zip(queries, query_vectors)):
-            try:
-                print(f"[RAG] 벡터 검색 시작: query {i+1}/{len(queries)}")
-                
-                # 벡터 검색
-                search_result = client.search(
-                    collection_name=collection,
-                    query_vector=vector,
-                    limit=limit,
-                    with_payload=True
-                )
-                
-                print(f"[RAG] 검색 결과: {len(search_result)}건")
-                
-                for item in search_result:
-                    results.append({
-                        'res_id': item.id,
-                        'res_score': item.score,
-                        'type_question': question_type,
-                        'type_vector': '',  # 벡터 타입
-                        'res_payload': item.payload
+        # 모든 문서 가져오기 (스크롤 방식)
+        all_documents = []
+        try:
+            scroll_result = client.scroll(
+                collection_name=collection,
+                limit=1000,  # 한 번에 가져올 문서 수
+                with_payload=True
+            )
+            
+            for point in scroll_result[0]:
+                if point.payload:
+                    all_documents.append({
+                        'id': point.id,
+                        'payload': point.payload
                     })
-            except Exception as e:
-                print(f"[RAG] 개별 벡터 검색 오류 (query {i}): {e}")
-                continue
+            
+            print(f"[DIRECT_SEARCH] 총 {len(all_documents)}개 문서 로드")
+            
+        except Exception as e:
+            print(f"[DIRECT_SEARCH] 문서 로드 오류: {e}")
+            return []
         
-        print(f"[RAG] 총 검색 결과: {len(results)}건")
-        return results
+        if not all_documents:
+            print(f"[DIRECT_SEARCH] 검색할 문서가 없습니다")
+            return []
+        
+        # 유사도 계산기 초기화
+        similarity_calc = DirectSimilarityCalculator()
+        
+        # 각 쿼리에 대해 유사도 계산
+        all_results = []
+        for query in queries:
+            print(f"[DIRECT_SEARCH] 쿼리 처리: {query}")
+            
+            # 문서들과 유사도 계산
+            query_results = similarity_calc.find_similar_documents(
+                query=query,
+                documents=[doc['payload'] for doc in all_documents],
+                top_k=limit
+            )
+            
+            # 결과 변환
+            for i, result in enumerate(query_results):
+                all_results.append({
+                    'res_id': all_documents[i]['id'] if i < len(all_documents) else f"doc_{i}",
+                    'res_score': result['similarity'],
+                    'type_question': question_type,
+                    'type_vector': 'direct_similarity',
+                    'res_payload': result['document']
+                })
+        
+        # 유사도 순으로 정렬하여 상위 결과만 반환
+        all_results.sort(key=lambda x: x['res_score'], reverse=True)
+        final_results = all_results[:limit]
+        
+        print(f"[DIRECT_SEARCH] 최종 검색 결과: {len(final_results)}건")
+        for i, result in enumerate(final_results[:3]):
+            title = result['res_payload'].get('ppt_title', '제목없음')
+            score = result['res_score']
+            print(f"[DIRECT_SEARCH]   {i+1}. {title} (유사도: {score:.4f})")
+        
+        return final_results
         
     except Exception as e:
-        print(f"[RAG] Qdrant 검색 오류: {e}")
+        print(f"[DIRECT_SEARCH] 검색 오류: {e}")
         return []
 
-async def rag_vector_qdrant(question_type: str, limit: int, queries: List[str], query_vectors: List[List[float]], 
-                           ip: str, port: int, collection: str) -> List[dict]:
-    """Qdrant 벡터 검색"""
-    return await rag_multivector(question_type, limit, queries, query_vectors, ip, port, collection)
-
-async def rag_payload_qdrant(question_type: str, limit: int, queries: List[str], query_vectors: List[List[float]], 
-                             ip: str, port: int, collection: str) -> List[dict]:
-    """Qdrant 페이로드 검색"""
-    return await rag_multivector(question_type, limit, queries, query_vectors, ip, port, collection)
+# 기존 벡터 검색 함수들 제거 - 직접 검색으로 대체
 
 
 
@@ -161,6 +228,9 @@ class StreamRequest(BaseModel):
     question: str
     conversation_id: Optional[int] = None
     generate_image: Optional[bool] = False  # 이미지 생성 플래그 추가
+    # LangGraph 컨텍스트 필드 추가
+    langgraph_context: Optional[dict] = None
+    include_langgraph_context: Optional[bool] = False
 
 # 이미지 URL (실제 이미지 생성 시스템에서 처리)
 # SAMPLE_IMAGE_URLS = []
@@ -173,31 +243,52 @@ class SearchState(dict):
     candidates_total: List[dict] 
     response: List[dict]     # LLM이 생성한 응답
 
-# Redis 상태 발행 함수
-async def publish_node_status(node_name: str, status: str, data: dict):
-    """Redis를 통해 노드 상태를 발행"""
-    if redis_client is None:
-        print(f"[Redis] ❌ Redis 클라이언트가 초기화되지 않음 - {node_name}: {status}")
+# SSE 스트리밍을 위한 제너레이터 클래스
+class SSEGenerator:
+    def __init__(self, generator_id: str):
+        self.generator_id = generator_id
+        self.message_queue = asyncio.Queue()
+        self.is_active = True
+        
+    async def send_message(self, message: dict):
+        """메시지를 큐에 추가"""
+        if self.is_active:
+            await self.message_queue.put(message)
+    
+    async def close(self):
+        """제너레이터 종료"""
+        self.is_active = False
+        await self.message_queue.put(None)  # 종료 신호
+
+# SSE 스트리밍을 위한 전역 변수
+sse_generators = {}
+
+# SSE 상태 발행 함수
+async def yield_node_status(generator_id: str, node_name: str, status: str, data: dict):
+    """SSE를 통해 노드 상태를 발행"""
+    if generator_id not in sse_generators:
+        print(f"[SSE] ❌ 제너레이터 ID가 없음 - {node_name}: {status}")
         return
         
     try:
         message = {
-            "node": node_name,
+            "stage": node_name,
             "status": status,
-            "data": data,
+            "result": data,
             "timestamp": asyncio.get_event_loop().time()
         }
-        message_json = json.dumps(message)
-        print(f"[Redis] 📤 발행 시도: {node_name}:{status} → 채널: {REDIS_CHANNEL}")
-        print(f"[Redis] 📄 메시지 내용: {message_json[:200]}...")
         
-        result = await redis_client.publish(REDIS_CHANNEL, message_json)
-        print(f"[Redis] ✅ 발행 완료: {node_name}:{status} (구독자 {result}명)")
+        # SSE 제너레이터에 메시지 전송
+        generator = sse_generators.get(generator_id)
+        if generator and generator.is_active:
+            await generator.send_message(message)
+            print(f"[SSE] ✅ 메시지 전송: {node_name}:{status}")
+        else:
+            print(f"[SSE] ❌ 제너레이터가 유효하지 않음: {generator_id}")
     except Exception as e:
-        print(f"[Redis] ❌ 발행 실패: {node_name}:{status} - 오류: {e}")
+        print(f"[SSE] ❌ 메시지 전송 실패: {node_name}:{status} - 오류: {e}")
         import traceback
-        print(f"[Redis] 오류 상세: {traceback.format_exc()}")
-        # Redis 오류가 발생해도 워크플로우는 계속 진행
+        print(f"[SSE] 오류 상세: {traceback.format_exc()}")
         pass
 
 # LangGraph 노드 함수들
@@ -206,13 +297,18 @@ async def node_rc_init(state: SearchState) -> SearchState:
     print("[inform]: node_rc_init")
     try: 
         question = state['question']
-        await publish_node_status("node_init", "completed", {"result": question})
+        generator_id = state.get('generator_id')
+        
+        if generator_id:
+            await yield_node_status(generator_id, "A", "completed", {"message": "입력 정리 완료", "question": question})
+        
         return {
             "question": question,
             "keyword": "",
             "candidates_each": [],
             "candidates_total": [],
-            "response": []
+            "response": [],
+            "generator_id": generator_id
         }
     except Exception as e:
         print("[error]: node_rc_init")
@@ -229,13 +325,17 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             print("[error]: OpenAI API 키가 설정되지 않았습니다.")
             # API 키가 없으면 기본 키워드만 반환
             base_keywords = [question]
-            await publish_node_status("node_rc_keyword", "completed", {"result": base_keywords})
+            generator_id = state.get('generator_id')
+            if generator_id:
+                await yield_node_status(generator_id, "B", "completed", {"message": "키워드 생성 완료", "keywords": base_keywords})
+            
             return {
                 "question": state['question'],
                 "keyword": base_keywords,
                 "candidates_each": [],
                 "candidates_total": [],
-                "response": []
+                "response": [],
+                "generator_id": generator_id
             }
         
         try:
@@ -251,7 +351,7 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             # AsyncOpenAI 클라이언트 생성
             client = AsyncOpenAI(
                 api_key=OPENAI_API_KEY,
-                base_url="https://api.openai.com/v1",
+                base_url=OPENAI_BASE_URL,
                 http_client=httpx_client,
                 default_headers={
                     "x-dep-ticket": OPENAI_API_KEY,
@@ -288,14 +388,17 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             # LLM 실패 시 기본 키워드 사용
             augmented_keywords = [question]
         
-        await publish_node_status("node_rc_keyword", "completed", {"result": augmented_keywords})
+        generator_id = state.get('generator_id')
+        if generator_id:
+            await yield_node_status(generator_id, "B", "completed", {"message": "LLM 키워드 생성 완료", "keywords": augmented_keywords})
         
         return {
             "question": state['question'],
             "keyword": augmented_keywords,
             "candidates_each": [],
             "candidates_total": [],
-            "response": []
+            "response": [],
+            "generator_id": generator_id
         }
     except Exception as e:
         print("[error]: node_rc_keyword")
@@ -308,25 +411,19 @@ async def node_rc_rag(state: SearchState) -> SearchState:
         # 벡터 DB 설정
         ip, port, collection = QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION
         
-        # 임베딩 모델 초기화
-        try:
-            embeddings = SimpleEmbeddings()
-        except Exception as e:
-            print(f"임베딩 모델 초기화 오류: {e}")
-            # 임베딩 모델 초기화 실패 시 더미 벡터 사용
-            embeddings = None
+        # 직접 검색 수행
+        candidates_each = []
         
         # question으로 검색
-        candidates_each = []
-        if state.get('question') and embeddings:
+        if state.get('question'):
             try:
-                query_vectors = embeddings.embed_documents([state['question']])
-                candidates_each.extend(await rag_multivector('question', 5, [state['question']], query_vectors, ip, port, collection))
+                question_results = await direct_document_search('question', 5, [state['question']], ip, port, collection)
+                candidates_each.extend(question_results)
             except Exception as e:
                 print(f"Question 검색 오류: {e}")
         
         # keyword로 검색 (문자열 또는 리스트 처리)
-        if state.get('keyword') and embeddings:
+        if state.get('keyword'):
             try:
                 # keyword가 리스트인지 문자열인지 확인
                 if isinstance(state['keyword'], list):
@@ -338,38 +435,16 @@ async def node_rc_rag(state: SearchState) -> SearchState:
                 keywords = [k for k in keywords if k and isinstance(k, str) and k.strip()]
                 
                 if keywords:
-                    query_vectors = embeddings.embed_documents(keywords)
-                    candidates_each.extend(await rag_multivector('keyword', 2, keywords, query_vectors, ip, port, collection))
+                    keyword_results = await direct_document_search('keyword', 3, keywords, ip, port, collection)
+                    candidates_each.extend(keyword_results)
             except Exception as e:
                 print(f"Keyword 검색 오류: {e}")
         
-        # 벡터 검색이 실패한 경우 기본 응답 생성
+        # 검색 결과가 없는 경우 빈 리스트 반환 (하드코딩 제거)
         if not candidates_each:
-            print("[RAG] 벡터 검색 결과가 없어 기본 응답을 생성합니다.")
-            # 검색 결과가 없을 때 기본 데이터 생성
-            candidates_each = [{
-                'res_id': 'no_results',
-                'res_score': 0.0,
-                'res_payload': {
-                    'title': '검색 결과 없음',
-                    'content': '데이터베이스에서 관련 정보를 찾을 수 없습니다. 질문을 더 구체적으로 작성하거나 다른 키워드로 시도해보세요.',
-                    'type': 'no_results'
-                }
-            }]
-            print(f"[RAG] 기본 응답 생성 완료: {len(candidates_each)}건")
+            print("[RAG] 검색 결과가 없습니다.")
 
-        # 가중 평균 summation (기존 랭그래프 코드와 동일)
-        w_question = {
-            'question': 1,
-            'keyword': 1
-        }
-        w_vector = {
-            'text': 1,
-            'summary_purpose': 0.5,
-            'summary_result': 0.5,
-            'summary_fb': 0.5,
-        }
-        
+        # 동적 점수 집계 (하드코딩 제거)
         aggregated_scores = defaultdict(float)
         payloads = {}
         
@@ -379,24 +454,28 @@ async def node_rc_rag(state: SearchState) -> SearchState:
                 try:
                     res_id = item.get('res_id')
                     score = item.get('res_score', 0.0)
-                    type_question = item.get('type_question', '')
-                    type_vector = item.get('type_vector', '')
                     
-                    if res_id is not None:
-                        aggregated_scores[res_id] += score * w_question.get(type_question, 1.0) * w_vector.get(type_vector, 1.0)
+                    if res_id is not None and score > 0:
+                        # 단순 점수 합산 (가중치 제거)
+                        aggregated_scores[res_id] += score
                         if res_id not in payloads:
                             payloads[res_id] = item.get('res_payload', {})
                 except Exception as e:
                     print(f"개별 결과 처리 오류: {e}")
                     continue
         
-        # 정렬된 결과 생성 (list of dicts 형태) - 상위 5건만
+        # 유사도 순으로 정렬하여 상위 결과 선택 (고정 개수 제거)
         candidates_total = sorted(
             [{'res_id': res_id, 'res_score': aggregated_scores[res_id], 'res_payload': payloads[res_id]}
              for res_id in aggregated_scores],
             key=lambda x: x['res_score'],
             reverse=True
-        )[:5]  # 상위 5건만 선택
+        )
+        
+        # 동적으로 결과 개수 결정 (최소 1개, 최대 10개)
+        if candidates_total:
+            max_results = min(len(candidates_total), max(1, min(10, len(candidates_total))))
+            candidates_total = candidates_total[:max_results]
         
         print(f"[RAG] 최종 검색 결과 (상위 5건):")
         for i, candidate in enumerate(candidates_total):
@@ -405,13 +484,16 @@ async def node_rc_rag(state: SearchState) -> SearchState:
             score = candidate.get('res_score', 0)
             print(f"  {i+1}. {title} - {summary} (유사도: {score:.4f})")
         
-        await publish_node_status("node_rc_rag", "completed", {"result": candidates_total})
+        generator_id = state.get('generator_id')
+        if generator_id:
+            await yield_node_status(generator_id, "C", "completed", {"message": "RAG 검색 완료", "documents_count": len(candidates_total)})
         
         return {
             "question": state.get('question', ''),
             "keyword": state.get('keyword', ''),
             "candidates_total": candidates_total,
-            "response": []
+            "response": [],
+            "generator_id": state.get('generator_id')
         }
     except Exception as e:
         print(f"[error]: node_rc_rag: {str(e)}")
@@ -421,30 +503,78 @@ async def node_rc_rag(state: SearchState) -> SearchState:
             "keyword": state.get('keyword', ''),
             "candidates_each": [],
             "candidates_total": [],
-            "response": []
+            "response": [],
+            "generator_id": state.get('generator_id')
         }
 
 async def node_rc_rerank(state: SearchState) -> SearchState:
-    """재순위 노드"""
+    """동적 재순위 노드 (하드코딩 제거)"""
     print("[inform]: node_rc_rerank")
     try:
-        cnt_result = 5
-        candidates_top = state['candidates_total'][:cnt_result]
+        candidates_top = state['candidates_total']
         
-        # 재순위 처리 (실제로는 LLM을 사용한 재순위)
-        for idx in range(len(candidates_top)):
-            candidates_top[idx].update({'res_relevance': 1.0 - (idx * 0.1)})
+        if not candidates_top:
+            print("[RERANK] 재순위할 문서가 없습니다.")
+            return {
+                "question": state['question'],
+                "keyword": state["keyword"],
+                "candidates_total": state["candidates_total"],
+                "response": [],
+                "generator_id": state.get('generator_id')
+            }
         
-        # 점수와 관련성으로 정렬
-        sorted_candidates_top = sorted(candidates_top, key=lambda x: (-x['res_relevance'], -x['res_score']))
+        # 유사도 기반 동적 재순위 (하드코딩된 0.1 감소 제거)
+        similarity_calc = DirectSimilarityCalculator()
+        question = state['question']
         
-        await publish_node_status("node_rc_rerank", "completed", {"result": sorted_candidates_top})
+        for candidate in candidates_top:
+            try:
+                # 문서 텍스트 추출
+                payload = candidate.get('res_payload', {})
+                doc_title = payload.get('ppt_title', '')
+                doc_content = payload.get('ppt_content', payload.get('ppt_summary', ''))
+                doc_text = f"{doc_title} {doc_content}"
+                
+                # 질문과 문서 간 직접 유사도 계산
+                relevance_score = similarity_calc.calculate_combined_similarity(question, doc_text)
+                
+                # 기존 검색 점수와 관련성 점수를 결합
+                original_score = candidate.get('res_score', 0.0)
+                combined_score = (original_score * 0.6) + (relevance_score * 0.4)
+                
+                candidate.update({
+                    'res_relevance': relevance_score,
+                    'combined_score': combined_score
+                })
+                
+            except Exception as e:
+                print(f"[RERANK] 개별 문서 재순위 오류: {e}")
+                # 오류 시 기본값 설정
+                candidate.update({
+                    'res_relevance': candidate.get('res_score', 0.0),
+                    'combined_score': candidate.get('res_score', 0.0)
+                })
+        
+        # 결합 점수로 정렬 (하드코딩된 정렬 방식 제거)
+        sorted_candidates_top = sorted(candidates_top, key=lambda x: x.get('combined_score', 0), reverse=True)
+        
+        print(f"[RERANK] 재순위 완료: {len(sorted_candidates_top)}개 문서")
+        for i, candidate in enumerate(sorted_candidates_top[:3]):
+            title = candidate.get('res_payload', {}).get('ppt_title', '제목없음')
+            combined_score = candidate.get('combined_score', 0)
+            relevance = candidate.get('res_relevance', 0)
+            print(f"[RERANK]   {i+1}. {title} (결합점수: {combined_score:.4f}, 관련성: {relevance:.4f})")
+        
+        generator_id = state.get('generator_id')
+        if generator_id:
+            await yield_node_status(generator_id, "C", "completed", {"message": "동적 재순위 완료", "top_documents": len(sorted_candidates_top)})
         
         return {
             "question": state['question'],
             "keyword": state["keyword"],
             "candidates_total": state["candidates_total"],
-            "response": sorted_candidates_top
+            "response": sorted_candidates_top,
+            "generator_id": state.get('generator_id')
         }
     except Exception as e:
         print("[error]: node_rc_rerank")
@@ -455,8 +585,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
     print("[inform]: node_rc_answer 실행")
     
     try:
-        cnt_result = 5
-        candidates_top = state['response'][:cnt_result]
+        candidates_top = state['response']
         
         # 검색 결과가 있는 경우
         if candidates_top:
@@ -512,7 +641,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
                     # AsyncOpenAI 클라이언트 생성
                     client = AsyncOpenAI(
                         api_key=OPENAI_API_KEY,
-                        base_url="https://api.openai.com/v1",
+                        base_url=OPENAI_BASE_URL,
                         http_client=httpx_client,
                         default_headers={
                             "x-dep-ticket": OPENAI_API_KEY,
@@ -566,6 +695,24 @@ API 호출 중 오류가 발생했습니다: {str(e)}"""
             print(f"[Answer] 🎯 최종 생성된 답변:")
             print(f"[Answer] {llm_answer}")
             
+            # 이미지 URL 생성 (첫 번째 문서 기반)
+            image_url = None
+            if top_result and top_payload:
+                # 문서 제목과 인덱스를 기반으로 이미지 URL 생성
+                doc_title = top_payload.get('ppt_title', '')
+                doc_index = top_result.get('res_id', 0)
+                
+                if doc_title and doc_index:
+                    # 설정 가능한 기본 URL에 RAG 문서 정보를 추가한 형식
+                    # URL 안전한 문자열로 변환
+                    import urllib.parse
+                    safe_title = urllib.parse.quote(doc_title, safe='')
+                    image_url = f"{IMAGE_BASE_URL}{IMAGE_PATH_PREFIX}/{safe_title}/{doc_index}.jpg"
+                    print(f"[Answer] 🖼️ 생성된 이미지 URL: {image_url}")
+                    print(f"[Answer] 🔧 이미지 URL 구성 - 기본URL: {IMAGE_BASE_URL}, 경로: {IMAGE_PATH_PREFIX}, 제목: {safe_title}, 인덱스: {doc_index}")
+                else:
+                    print(f"[Answer] ⚠️ 이미지 URL 생성 실패 - doc_title: {doc_title}, doc_index: {doc_index}")
+
             # LangGraph 실행 결과를 위한 완전한 응답 구조
             response = {
                 "res_id": [rest['res_id'] for rest in candidates_top],
@@ -573,7 +720,8 @@ API 호출 중 오류가 발생했습니다: {str(e)}"""
                 "q_mode": "search",  # 랭그래프는 항상 search 모드
                 "keyword": state["keyword"],  # 키워드 증강 목록
                 "db_search_title": [item.get('res_payload', {}).get('ppt_title', '제목 없음') for item in candidates_top],  # 검색된 문서 제목들
-                "top_document": top_result
+                "top_document": top_result,
+                "analysis_image_url": image_url  # 랭그래프 4단계 분석 결과 이미지 URL
             }
         else:
             print(f"[Answer] ⚠️ 검색 결과가 없습니다. 기본 답변을 생성합니다.")
@@ -591,7 +739,13 @@ API 호출 중 오류가 발생했습니다: {str(e)}"""
         # LangGraph 실행 결과는 프론트엔드에서 저장하도록 변경 (중복 저장 방지)
         # await save_langgraph_result_to_db(state['question'], response, state["keyword"], state["candidates_total"])
         
-        await publish_node_status("node_rc_answer", "completed", {"result": response})
+        generator_id = state.get('generator_id')
+        if generator_id:
+            await yield_node_status(generator_id, "D", "completed", {
+                "message": "최종 답변 생성 완료", 
+                "answer": response.get('answer', '')[:100],
+                "analysis_image_url": response.get('analysis_image_url')  # 이미지 URL 포함
+            })
         
         print(f"[Answer] ✅ node_rc_answer 함수 완료")
         
@@ -599,7 +753,8 @@ API 호출 중 오류가 발생했습니다: {str(e)}"""
             "question": state['question'],
             "keyword": state["keyword"],
             "candidates_total": state["candidates_total"],
-            "response": response
+            "response": response,
+            "generator_id": state.get('generator_id')
         }
         
     except Exception as e:
@@ -656,7 +811,9 @@ async def node_rc_plain_answer(state: SearchState) -> SearchState:
     # LangGraph 실행 결과는 프론트엔드에서 저장하도록 변경 (중복 저장 방지)
     # await save_langgraph_result_to_db(state['question'], complete_result, state["keyword"], state["candidates_total"])
     
-    await publish_node_status("node_rc_plain_answer", "completed", {"result": complete_result})
+    generator_id = state.get('generator_id')
+    if generator_id:
+        await yield_node_status(generator_id, "D", "completed", {"message": "기본 답변 생성 완료", "answer": complete_result.get('answer', '')[:100]})
     
     return {
         "question": state['question'],
@@ -668,15 +825,39 @@ async def node_rc_plain_answer(state: SearchState) -> SearchState:
             "q_mode": "search",  # 최초 질문은 항상 search 모드
             "keyword": state["keyword"],  # 키워드 증강 목록
             "db_search_title": []
-        }
+        },
+        "generator_id": state.get('generator_id')
     }
 
 def judge_rc_ragscore(state: SearchState) -> str:
-    """RAG 점수 판단"""
+    """동적 RAG 점수 판단 (하드코딩된 임계값 제거)"""
     candidates_total = state["candidates_total"]
-    return "Y" if any(candidate.get("res_score", 0) >= 0.5 for candidate in candidates_total) else "N"
+    
+    if not candidates_total:
+        return "N"
+    
+    # 동적 임계값 계산: 평균 점수의 70%를 임계값으로 사용
+    scores = [candidate.get("res_score", 0) for candidate in candidates_total]
+    valid_scores = [score for score in scores if score > 0]
+    
+    if not valid_scores:
+        return "N"
+    
+    avg_score = sum(valid_scores) / len(valid_scores)
+    dynamic_threshold = avg_score * 0.7
+    
+    # 최소 임계값 설정 (너무 낮은 점수는 제외)
+    min_threshold = 0.1
+    threshold = max(dynamic_threshold, min_threshold)
+    
+    has_good_results = any(candidate.get("res_score", 0) >= threshold for candidate in candidates_total)
+    
+    print(f"[JUDGE] 동적 임계값: {threshold:.4f} (평균: {avg_score:.4f})")
+    print(f"[JUDGE] 판단 결과: {'Y' if has_good_results else 'N'}")
+    
+    return "Y" if has_good_results else "N"
 
-async def save_langgraph_result_to_db(question: str, response: dict, keywords: list, candidates_total: list):
+async def save_langgraph_result_to_db(question: str, response: dict, keywords: list, candidates_total: list, image_url: str = None):
     """LangGraph 실행 결과를 DB에 직접 저장 (랭그래프 전용)"""
     try:
         print(f"[DB_SAVE] LangGraph 결과 DB 저장 시작 (랭그래프 전용)")
@@ -684,14 +865,18 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
         print(f"[DB_SAVE] 응답: {response.get('answer', '')[:100]}...")
         print(f"[DB_SAVE] 키워드: {keywords}")
         print(f"[DB_SAVE] 문서: {len(candidates_total)}건")
+        print(f"[DB_SAVE] 이미지 URL: {image_url}")
         
         # 새 대화 생성 또는 기존 대화 찾기
         db = next(get_db())
         
         # 새 대화 생성
+        from datetime import datetime
+        title = question[:50] + "..." if len(question) > 50 else question
         conversation = Conversation(
-            title=question[:50] + "..." if len(question) > 50 else question,
-            user_id=1  # 기본 사용자 ID (실제로는 인증된 사용자 ID 사용)
+            title=title,
+            user_id=1,  # 기본 사용자 ID (실제로는 인증된 사용자 ID 사용)
+            last_updated=datetime.utcnow()
         )
         db.add(conversation)
         db.commit()
@@ -705,7 +890,8 @@ async def save_langgraph_result_to_db(question: str, response: dict, keywords: l
             ans=response.get('answer', ''),
             q_mode='search',  # 랭그래프 전용 모드
             keyword=str(keywords) if keywords else None,
-            db_search_title=str([item.get('res_payload', {}).get('ppt_title', '') for item in candidates_total[:5]]) if candidates_total else None
+            db_search_title=str([item.get('res_payload', {}).get('ppt_title', '') for item in candidates_total[:5]]) if candidates_total else None,
+            image=image_url  # 이미지 URL 추가
             # user_name 필드 제거 - 하드코딩 방지
         )
         
@@ -782,7 +968,7 @@ async def get_llm_response(question: str) -> str:
         # AsyncOpenAI 클라이언트 생성
         client = AsyncOpenAI(
             api_key=OPENAI_API_KEY,
-            base_url="https://api.openai.com/v1",
+            base_url=OPENAI_BASE_URL,
             http_client=httpx_client,
             default_headers={
                 "x-dep-ticket": OPENAI_API_KEY,
@@ -949,7 +1135,108 @@ def get_conversation_context(conversation_id: int, db: Session) -> dict:
             "message_count": 0
         }
 
-# LangGraph 직접 실행 엔드포인트 (첫 번째 질문용)
+# SSE 스트리밍 엔드포인트 (첫 번째 질문용)
+@router.post("/langgraph/stream")
+async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends(get_db)):
+    """LangGraph SSE 스트리밍 실행 (첫 번째 질문 전용)"""
+    
+    async def generate_sse():
+        generator_id = str(uuid.uuid4())
+        generator = SSEGenerator(generator_id)
+        sse_generators[generator_id] = generator
+        
+        try:
+            # OpenAI API 키 확인
+            if not OPENAI_API_KEY:
+                yield f"data: {json.dumps({'error': 'OpenAI API 키가 설정되지 않았습니다.'})}\n\n"
+                return
+            
+            print(f"[SSE] 🚀 LangGraph SSE 스트리밍 시작: {request.question}")
+            
+            # 대화 ID가 있는 경우 질문 유형 확인
+            if request.conversation_id:
+                is_first = is_first_question_in_conversation(request.conversation_id, db)
+                if not is_first:
+                    yield f"data: {json.dumps({'error': '추가 질문은 /langgraph/followup 엔드포인트를 사용하세요'})}\n\n"
+                    return
+            
+            # 워크플로우 확인
+            if langgraph_instance is None:
+                yield f"data: {json.dumps({'error': 'LangGraph 워크플로우가 초기화되지 않았습니다.'})}\n\n"
+                return
+            
+            # 초기 상태에 generator_id 추가
+            initial_state = {
+                "question": request.question,
+                "generator_id": generator_id
+            }
+            
+            print(f"[SSE] LangGraph 실행 시작: {request.question}")
+            
+            # LangGraph 실행을 별도 태스크로 실행
+            async def run_langgraph():
+                try:
+                    result = await langgraph_instance.ainvoke(initial_state)
+                    # DONE 메시지에 전체 LangGraph 결과 포함
+                    done_message = {
+                        "stage": "DONE", 
+                        "result": result,  # 전체 LangGraph 결과 포함
+                        "keyword": result.get('keyword', []),
+                        "candidates_total": result.get('candidates_total', [])
+                    }
+                    await generator.send_message(done_message)
+                except Exception as e:
+                    await generator.send_message({"stage": "ERROR", "error": str(e)})
+                finally:
+                    await generator.close()
+            
+            # LangGraph 실행 태스크 시작
+            langgraph_task = asyncio.create_task(run_langgraph())
+            
+            # SSE 메시지 스트리밍
+            while generator.is_active:
+                try:
+                    # 타임아웃을 짧게 설정하여 응답성 향상
+                    message = await asyncio.wait_for(generator.message_queue.get(), timeout=0.1)
+                    
+                    if message is None:  # 종료 신호
+                        break
+                    
+                    # SSE 형식으로 메시지 전송
+                    yield f"data: {json.dumps(message)}\n\n"
+                    
+                except asyncio.TimeoutError:
+                    # 타임아웃 시 하트비트 전송
+                    yield f"data: {json.dumps({'heartbeat': True})}\n\n"
+                    continue
+                except Exception as e:
+                    print(f"[SSE] 메시지 처리 오류: {e}")
+                    break
+            
+            # 최종 완료 메시지
+            yield f"data: [DONE]\n\n"
+            
+        except Exception as e:
+            print(f"[SSE] 스트리밍 오류: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            # 정리
+            if generator_id in sse_generators:
+                del sse_generators[generator_id]
+            print(f"[SSE] 스트리밍 종료: {generator_id}")
+    
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+# LangGraph 직접 실행 엔드포인트 (첫 번째 질문용) - 기존 유지
 @router.post("/langgraph")
 async def execute_langgraph(request: StreamRequest, db: Session = Depends(get_db)):
     """LangGraph를 직접 실행하여 결과 반환 (첫 번째 질문 전용)"""
@@ -1037,28 +1324,67 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
         if not request.conversation_id:
             return Response(content="Error: 추가 질문은 conversation_id가 필요합니다", media_type="text/plain")
         
-        # 대화 컨텍스트 가져오기
-        context = get_conversation_context(request.conversation_id, db)
+        # LangGraph 컨텍스트 처리 (프론트엔드에서 전송된 경우)
+        langgraph_context = getattr(request, 'langgraph_context', None)
+        include_langgraph_context = getattr(request, 'include_langgraph_context', False)
         
-        if not context["first_message"]:
-            print(f"[FOLLOWUP_STREAM] ⚠️ 첫 번째 질문 없음 - 기본 컨텍스트로 처리")
-            # 첫 번째 질문이 없어도 일반적인 답변 제공
-            document_title = "일반 대화"
-            document_content = "이전 대화 맥락을 참고하여 답변드리겠습니다."
-        else:
-            # 첫 번째 질문의 키워드와 문서 정보 활용
-            first_message = context["first_message"]
+        if include_langgraph_context and langgraph_context:
+            print(f"[FOLLOWUP_STREAM] 🔬 LangGraph 컨텍스트 사용")
+            print(f"[FOLLOWUP_STREAM] 원본 질문: {langgraph_context.get('original_question', 'N/A')}")
+            print(f"[FOLLOWUP_STREAM] 키워드: {langgraph_context.get('keywords', 'N/A')}")
+            print(f"[FOLLOWUP_STREAM] 검색 결과 수: {len(langgraph_context.get('search_results', []))}")
             
-            # 기본 문서 정보 (실제 RAG 결과가 없으므로 키워드 기반으로 구성)
-            document_title = first_message.db_search_title or "관련 문서"
-            document_content = f"키워드: {first_message.keyword}\n검색 결과: {first_message.db_search_title}\n첫 번째 질문: {first_message.question}\n첫 번째 답변: {first_message.ans[:500] if first_message.ans else '답변 없음'}..."
+            # LangGraph 컨텍스트로 문서 정보 구성
+            document_title = "LangGraph 검색 결과"
+            search_results = langgraph_context.get('search_results', [])
+            keywords = langgraph_context.get('keywords', [])
+            previous_answer = langgraph_context.get('previous_answer', '')
+            original_question = langgraph_context.get('original_question', '')
+            
+            # 검색 결과를 문서 내용으로 구성
+            search_content = ""
+            for i, result in enumerate(search_results[:3], 1):
+                if isinstance(result, dict) and 'res_payload' in result:
+                    title = result['res_payload'].get('ppt_title', f'문서 {i}')
+                    content = result['res_payload'].get('ppt_content', '내용 없음')
+                    search_content += f"\n[문서 {i}] {title}: {content}"
+            
+            document_content = f"""
+[첫 번째 질문] {original_question}
+
+[추출된 키워드] {', '.join(keywords) if isinstance(keywords, list) else keywords}
+
+[검색된 문서들]{search_content}
+
+[이전 답변] {previous_answer[:500]}...
+"""
+        else:
+            # 기존 대화 컨텍스트 사용
+            context = get_conversation_context(request.conversation_id, db)
+            
+            if not context["first_message"]:
+                print(f"[FOLLOWUP_STREAM] ⚠️ 첫 번째 질문 없음 - 기본 컨텍스트로 처리")
+                document_title = "일반 대화"
+                document_content = "이전 대화 맥락을 참고하여 답변드리겠습니다."
+            else:
+                # 첫 번째 질문의 키워드와 문서 정보 활용
+                first_message = context["first_message"]
+                document_title = first_message.db_search_title or "관련 문서"
+                document_content = f"키워드: {first_message.keyword}\n검색 결과: {first_message.db_search_title}\n첫 번째 질문: {first_message.question}\n첫 번째 답변: {first_message.ans[:500] if first_message.ans else '답변 없음'}..."
         
         print(f"[FOLLOWUP_STREAM] 📄 재사용할 RAG 문서:")
         print(f"[FOLLOWUP_STREAM] 제목: {document_title}")
         print(f"[FOLLOWUP_STREAM] 내용 길이: {len(document_content)} 문자")
         
         # 대화 히스토리 구성
-        conversation_history = context["conversation_history"]
+        if include_langgraph_context and langgraph_context:
+            # LangGraph 컨텍스트 사용 시 기본 대화 히스토리만 가져오기
+            context = get_conversation_context(request.conversation_id, db)
+            conversation_history = context["conversation_history"]
+        else:
+            # 기존 방식 사용
+            conversation_history = context["conversation_history"]
+        
         print(f"[FOLLOWUP_STREAM] 💬 대화 히스토리: {len(conversation_history)}개 메시지")
         
         # 시스템 프롬프트 구성
@@ -1140,7 +1466,7 @@ async def get_streaming_response_async(messages: List[Dict], request: Request, g
         # AsyncOpenAI 클라이언트 생성
         client = AsyncOpenAI(
             api_key=OPENAI_API_KEY,
-            base_url="https://api.openai.com/v1",
+            base_url=OPENAI_BASE_URL,
             http_client=httpx_client,
             default_headers={
                 "x-dep-ticket": OPENAI_API_KEY,

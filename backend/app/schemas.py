@@ -91,6 +91,7 @@ class MessageBase(BaseModel):
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
     feedback: Optional[str] = None
 
 class MessageCreate(BaseModel):
@@ -102,6 +103,7 @@ class MessageCreate(BaseModel):
     user_name: Optional[str] = None
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
     skip_llm: Optional[bool] = False  # LLM 재호출 방지 플래그
 
 class Message(MessageBase):
@@ -136,6 +138,7 @@ class MessageRequest(BaseModel):
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
 
 class FeedbackRequest(BaseModel):
     feedback: Optional[str]

@@ -66,6 +66,9 @@ async function processOAuthToken(idToken, state) {
               user: responseData.user.username
             });
             
+            // 로그인 후 새 대화 플래그 설정
+            store.commit('setLoginNewConversation', true);
+            
             // 인증 성공 후 대화 목록 가져오기
             console.log('[AUTH] 대화 목록 가져오기 시작');
             try {
@@ -133,6 +136,9 @@ async function processOAuthToken(idToken, state) {
                     id: userData.userid
                   }
                 });
+                
+                // 로그인 후 새 대화 플래그 설정
+                store.commit('setLoginNewConversation', true);
                 
                 // 인증 성공 후 대화 목록 가져오기
                 console.log('[AUTH] localStorage 복원 후 대화 목록 가져오기');
@@ -348,9 +354,7 @@ const store = createStore({
     return {
       conversations: [],
       currentConversation: null,
-      apiKey: localStorage.getItem('openai_api_key') || '',
-      apiKeySet: !!localStorage.getItem('openai_api_key'),
-      apiKeyError: null,
+      // OpenAI API Key 관련 상태 제거됨 - 서버 .env에서 관리
       llamaApiKey: localStorage.getItem('llama_api_key') || '',
       llamaApiBase: localStorage.getItem('llama_api_base') || '',
       llamaApiEndpoint: localStorage.getItem('llama_api_endpoint') || '/llama4/1/llama/aiserving/llama-4/maverick/v1/completions',
@@ -389,6 +393,20 @@ const store = createStore({
       state.conversations = state.conversations.filter(c => c.id !== conversationId);
       if (state.currentConversation && state.currentConversation.id === conversationId) {
         state.currentConversation = state.conversations.length > 0 ? state.conversations[0] : null;
+      }
+    },
+    updateConversationTitle(state, { conversationId, title }) {
+      // 대화 목록에서 제목 업데이트
+      if (Array.isArray(state.conversations)) {
+        const conversation = state.conversations.find(c => c.id === conversationId);
+        if (conversation) {
+          conversation.title = title;
+        }
+      }
+      
+      // 현재 대화의 제목도 업데이트
+      if (state.currentConversation && state.currentConversation.id === conversationId) {
+        state.currentConversation.title = title;
       }
     },
     setCurrentConversation(state, conversation) {
@@ -466,14 +484,7 @@ const store = createStore({
       // 반응성 트리거 업데이트
       state._feedbackUpdateTrigger = Date.now();
     },
-    setApiKey(state, apiKey) {
-      state.apiKey = apiKey;
-      state.apiKeySet = !!apiKey;
-      localStorage.setItem('openai_api_key', apiKey);
-    },
-    setApiKeyError(state, error) {
-      state.apiKeyError = error;
-    },
+    // OpenAI API Key 관련 mutations 제거됨 - 서버 .env에서 관리,
     setAuth(state, { token, user }) {
       console.log('[AUTH] setAuth called with token:', token ? token.substring(0, 20) + '...' : 'null');
       
@@ -732,17 +743,23 @@ const store = createStore({
         
         commit('setConversations', data);
         
-        // 현재 대화가 없거나 기존 선택한 대화가 있으면 해당 대화 유지
-        if (currentConversationId && data.length > 0) {
-          const existingConversation = data.find(c => c.id === currentConversationId);
-          if (existingConversation) {
-            commit('setCurrentConversation', existingConversation);
-          } else {
-            // 선택한 대화가 삭제된 경우 첫 번째 대화 선택
+        // 로그인 후 새 대화 플래그가 설정된 경우 자동 선택 방지
+        if (state.loginNewConversation) {
+          // 로그인 후에는 대화를 자동으로 선택하지 않음
+          commit('setCurrentConversation', null);
+        } else {
+          // 현재 대화가 없거나 기존 선택한 대화가 있으면 해당 대화 유지
+          if (currentConversationId && data.length > 0) {
+            const existingConversation = data.find(c => c.id === currentConversationId);
+            if (existingConversation) {
+              commit('setCurrentConversation', existingConversation);
+            } else {
+              // 선택한 대화가 삭제된 경우 첫 번째 대화 선택
+              commit('setCurrentConversation', data[0]);
+            }
+          } else if (!state.currentConversation && data.length > 0) {
             commit('setCurrentConversation', data[0]);
           }
-        } else if (!state.currentConversation && data.length > 0) {
-          commit('setCurrentConversation', data[0]);
         }
       } catch (error) {
         commit('setConversations', []);
@@ -949,29 +966,7 @@ const store = createStore({
       }
     },
     
-    async updateApiKey({ commit }, apiKey) {
-      try {
-        commit('setApiKeyError', null);
-        
-        const response = await fetch('http://localhost:8000/api/set-api-key', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ api_key: apiKey })
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.detail || 'Failed to set API key');
-        }
-        
-        commit('setApiKey', apiKey);
-        return { success: true };
-      } catch (error) {
-
-        commit('setApiKeyError', error.message);
-        return { success: false, error: error.message };
-      }
-    },
+    // OpenAI API Key 관련 action 제거됨 - 서버 .env에서 관리
     
     async sendStreamingMessage({ commit, state }, { text }) {
       try {
@@ -1195,6 +1190,7 @@ const store = createStore({
         
         commit('setConversations', []);
         commit('setCurrentConversation', null);
+        commit('setLoginNewConversation', true); // 로그인 후 새 대화 플래그 설정
         await dispatch('fetchConversations');
         
         return true;
@@ -1560,6 +1556,7 @@ const router = createRouter({
                 // 대화 초기화 시도
                 store.commit('setConversations', []);
                 store.commit('setCurrentConversation', null);
+                store.commit('setLoginNewConversation', true); // 로그인 후 새 대화 플래그 설정
                 store.dispatch('fetchConversations')
                   .catch(error => {
                     console.error('대화 가져오기 실패:', error);
