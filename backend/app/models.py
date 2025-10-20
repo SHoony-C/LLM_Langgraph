@@ -44,7 +44,7 @@ class Message(Base):
     ans = Column(Text, nullable=True)
     q_mode = Column(Enum("search", "add", name="q_mode_enum"), nullable=True)  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword = Column(Text, nullable=True)  # 키워드 정보 저장
-    db_search_title = Column(Text, nullable=True)  # 랭체인에서 찾은 문서 타이틀 저장
+    db_contents = Column(Text, nullable=True)  # 검색 결과 전체 정보 저장 (JSON 형식)
     image = Column(Text, nullable=True)  # 이미지 URL 저장
     feedback = Column(Enum("positive", "negative", name="feedback_enum"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

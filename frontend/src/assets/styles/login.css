@@ -281,7 +281,7 @@
 }
 
 /* Mobile responsiveness */
-@media (max-width: 768px) {
+@media (max-width: 1468px) {
   .auth-container {
     width: 90vw;
     padding: 30px 20px;

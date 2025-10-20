@@ -92,13 +92,13 @@
                       >
                         <div class="result-header">
                           <span class="result-number">#{{ index + 1 }}</span>
-                          <span class="result-score">유사도: {{ (result.res_score || result.score || 0).toFixed(4) }}</span>
+                          <span class="result-score">유사도: {{ result.score?.toFixed(4) || '0.0000' }}</span>
                         </div>
                         <div class="result-content">
-                          <div class="result-title">{{ result.res_payload?.document_name || result.title || '제목 없음' }}</div>
-                          <div class="result-summary">{{ result.res_payload?.vector?.summary_result || result.summary || '요약 없음' }}</div>
-                          <div class="result-text">{{ result.res_payload?.vector?.text || result.text || '내용 없음' }}</div>
-                          <div v-if="result.res_payload?.vector?.image_url || result.image_url" class="result-image-indicator">
+                          <div class="result-title">{{ result.title || '제목 없음' }}</div>
+                          <div class="result-summary">{{ result.summary || '요약 없음' }}</div>
+                          <div class="result-text">{{ result.text || '내용 없음' }}</div>
+                          <div v-if="result.image_url" class="result-image-indicator">
                             🖼️ 이미지 포함 (클릭하여 보기)
                           </div>
                         </div>
@@ -170,35 +170,23 @@
                 <div v-if="currentStep >= 4 && analysisImageUrl" class="analysis-image">
                   <label>분석 결과:</label>
                   <div class="image-container">
-                    <!-- 이미지 오류 상태일 때만 오류 메시지 표시 -->
-                    <div v-if="imageLoadFailed" class="image-error-display">
-                      <div class="error-icon">⚠️</div>
-                      <div class="error-message">
-                        <strong>이미지를 불러올 수 없습니다</strong>
-                        <p>네트워크 연결을 확인하거나 서버 상태를 점검해주세요.</p>
-                        <div class="error-url">
-                          <label>이미지 URL:</label>
-                          <code class="url-text">{{ failedImageUrl }}</code>
-                        </div>
-                      </div>
-                    </div>
-                    <!-- 이미지가 정상이면 표시 (GET 요청 없음) -->
-                    <div v-else class="image-wrapper">
-                      <div class="image-placeholder">
-                        <div class="placeholder-icon">🖼️</div>
-                        <div class="placeholder-text">
-                          <strong>분석 이미지 생성됨</strong>
-                          <p>이미지 URL: {{ analysisImageUrl }}</p>
-                          <button @click="openImageInNewTab(analysisImageUrl)" class="view-image-btn">
-                            새 탭에서 이미지 보기
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <img 
+                      :src="analysisImageUrl" 
+                      alt="랭그래프 4단계 분석 결과" 
+                      class="analysis-result-image clickable-image" 
+                      @error="handleImageError"
+                      @click="openImageInNewTab(analysisImageUrl)"
+                      title="클릭하면 새 탭에서 이미지를 볼 수 있습니다"
+                    />
                     <div class="image-caption">
                       <strong>랭그래프 4단계 분석 결과</strong><br>
                       • RAG 검색 기반 분석 이미지<br>
                       • 클릭하면 새 탭에서 확대 보기
+                    </div>
+                    <!-- URL 표시 (검증용) -->
+                    <div class="image-url-display">
+                      <label>이미지 URL (검증용):</label>
+                      <code class="url-text">{{ analysisImageUrl }}</code>
                     </div>
                   </div>
                 </div>
@@ -305,10 +293,7 @@
                 <div class="message-text" v-if="message.role === 'user'">
                   {{ message.question || '' }}
                 </div>
-                <div class="message-text" v-else>
-                  <!-- 디버깅: 메시지 정보 출력 -->
-                  <!-- {{ `[DEBUG] ID: ${message.id}, ans 길이: ${message.ans ? message.ans.length : 0}` }} -->
-                  <div v-html="formatAnswer(message.ans || '')"></div>
+                <div class="message-text" v-else v-html="formatAnswer(message.ans || '')">
                 </div>
               </div>
               
@@ -426,8 +411,6 @@ export default {
       streamingAnswer: '', // 실시간 스트리밍 답변
       isStreamingAnswer: false, // 답변 스트리밍 중 여부
       analysisImageUrl: '', // 랭그래프 4단계 분석 결과 이미지 URL
-      imageLoadFailed: false, // 이미지 로드 실패 여부
-      failedImageUrl: '', // 실패한 이미지 URL
       lastImageUrl: '', // 마지막으로 시도된 이미지 URL (디버깅용)
       langGraphError: null, // LangGraph API 오류 정보
               extractedKeywords: null, // 추출된 키워드 정보
@@ -435,15 +418,17 @@ export default {
       rangraphHistory: [], // 랭그래프 히스토리 (추가 질문 모드용)
       isFirstQuestionInSession: true, // 현재 세션에서 첫 번째 질문 여부
       
-      // 랭그래프 복원 관련 변수들
+      // 성능 최적화를 위한 캐시 변수들
+      cachedMessages: null,
+      cachedConversationId: null,
+      cachedMessagesLength: 0,
       lastRestoredConversationId: null,
       lastRestoredMessageCount: 0,
       scrollPending: false,
       
       // 실시간 기능 보존을 위한 상태 변수들
       isNewConversation: true, // 새 대화 여부 (실시간 기능 활성화용)
-      isRestoringConversation: false, // 대화 복원 중 여부
-      isFollowupQuestion: false // 추가 질문 중 여부 (랭그래프 영역 고정용)
+      isRestoringConversation: false // 대화 복원 중 여부
       
     };
   },
@@ -454,20 +439,22 @@ export default {
       'isStreaming',
       'streamingMessage'
     ]),
-    // 메시지 배열의 반응성을 보장하기 위한 computed 속성 (캐시 제거)
+    // 메시지 배열의 반응성을 보장하기 위한 computed 속성 (메모이제이션 최적화)
     currentMessages() {
       const currentConversation = this.$store.state.currentConversation;
       
       if (!currentConversation || !currentConversation.messages) {
-        console.log('📭 currentMessages: 대화 또는 메시지 없음');
         return [];
       }
       
-      // 캐시 사용하지 않고 항상 최신 데이터 반환
-      console.log('📬 currentMessages: 최신 메시지 반환', currentConversation.messages.length, '개');
-      currentConversation.messages.forEach(msg => {
-        console.log(`  - 메시지 ${msg.id}: role=${msg.role}, ans 길이=${msg.ans ? msg.ans.length : 0}`);
-      });
+      // 메시지 배열 참조가 변경되지 않았다면 기존 배열 반환 (성능 최적화)
+      if (this.cachedMessages && 
+          this.cachedConversationId === currentConversation.id &&
+          this.cachedMessagesLength === currentConversation.messages.length) {
+        return this.cachedMessages;
+      }
+      
+      // 캐시 업데이트는 watch에서 처리하도록 변경
       return currentConversation.messages;
     },
     // 개별 메시지의 피드백 상태를 확인하는 메소드
@@ -512,25 +499,11 @@ export default {
       this.isNewConversation = false; // 기존 대화 복원
       
       // 캐시 확인 - 동일한 대화에 대해 이미 복원했다면 스킵 (성능 최적화)
-      // 단, 다른 채팅을 갔다가 돌아온 경우는 복원 필요
       if (this.lastRestoredConversationId === conversation?.id && 
-          this.lastRestoredMessageCount === conversation?.messages?.length &&
-          this.showRangraph && this.currentStep >= 4) {
+          this.lastRestoredMessageCount === conversation?.messages?.length) {
         console.log('동일한 대화에 대해 이미 복원됨 - 스킵');
         this.isRestoringConversation = false;
         return;
-      }
-      
-      // 다른 채팅을 갔다가 돌아온 경우 랭그래프 상태 초기화
-      if (this.lastRestoredConversationId && this.lastRestoredConversationId !== conversation?.id) {
-        console.log('다른 대화로 전환됨 - 랭그래프 상태 초기화');
-        this.showRangraph = false;
-        this.currentStep = 0;
-        this.originalInput = '';
-        this.finalAnswer = '';
-        this.searchResults = [];
-        this.augmentedKeywords = [];
-        this.analysisImageUrl = '';
       }
       
       console.log('restoreRangraphFromConversation 호출됨:', {
@@ -556,50 +529,20 @@ export default {
         messageCount: conversation.messages.length
       });
       
-      // 메시지 구조 확인
-      console.log('메시지 구조 확인:', conversation.messages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        q_mode: msg.q_mode,
-        keyword: msg.keyword ? '있음' : '없음',
-        db_contents: msg.db_contents ? '있음' : '없음',
-        question: msg.question?.substring(0, 30)
-      })));
-      
       // 성능 최적화: search 메시지만 먼저 필터링 (가장 빠른 조건)
       const searchMessages = conversation.messages.filter(msg => msg.q_mode === 'search');
-      console.log('search 메시지 개수:', searchMessages.length);
       
       // search 메시지가 없으면 첫 번째 사용자 메시지에서 LangGraph 정보 찾기 (최적화)
       let firstQuestionMessage = null;
       if (searchMessages.length === 0) {
         // 사용자 메시지만 필터링하여 검색 범위 축소
         const userMessages = conversation.messages.filter(msg => msg.role === 'user');
-        console.log('사용자 메시지 개수:', userMessages.length);
         
         for (const msg of userMessages) {
-          console.log('메시지 체크:', {
-            id: msg.id,
-            keyword: msg.keyword,
-            db_contents: msg.db_contents,
-            q_mode: msg.q_mode,
-            hasKeyword: !!msg.keyword,
-            hasDbContents: !!msg.db_contents,
-            isSearch: msg.q_mode === 'search'
-          });
-          
           // 간단한 조건부터 먼저 확인 (성능 최적화)
-          // db_contents 또는 keyword가 있으면 랭그래프 메시지로 간주
-          if (msg.keyword || msg.db_contents || msg.q_mode === 'search') {
-            console.log('✅ 랭그래프 메시지 발견:', {
-              id: msg.id,
-              keyword: msg.keyword ? '있음' : '없음',
-              db_contents: msg.db_contents ? '있음' : '없음',
-              q_mode: msg.q_mode
-            });
-            
+          if (msg.keyword || msg.db_search_title) {
             // JSON 파싱은 필요한 경우에만 수행
-            if (msg.keyword && typeof msg.keyword === 'string' && msg.keyword.startsWith('{')) {
+            if (msg.keyword && msg.keyword.startsWith('{')) {
               try {
                 const keywordData = JSON.parse(msg.keyword);
                 if (keywordData && typeof keywordData === 'object' && keywordData.originalInput) {
@@ -627,15 +570,6 @@ export default {
         const firstSearchMessage = messageToRestore;
         
         console.log('첫 번째 검색 메시지 복원:', firstSearchMessage.id);
-        console.log('복원할 메시지 정보:', {
-          keyword: firstSearchMessage.keyword ? '있음' : '없음',
-          db_contents: firstSearchMessage.db_contents ? '있음' : '없음',
-          image: firstSearchMessage.image ? '있음' : '없음',
-          q_mode: firstSearchMessage.q_mode,
-          ans: firstSearchMessage.ans ? `있음 (${firstSearchMessage.ans.length}자)` : '없음',
-          text: firstSearchMessage.text ? `있음 (${firstSearchMessage.text.length}자)` : '없음'
-        });
-        console.log('전체 메시지 객체:', firstSearchMessage);
         
         // 이미 첫 번째 질문이 완료된 대화이므로 상태 변경
         this.isFirstQuestionInSession = false;
@@ -650,35 +584,13 @@ export default {
           return;
         }
         
-        // assistant 메시지에서 답변 찾기 (user 메시지에는 ans가 없을 수 있음)
-        let answerText = firstSearchMessage.ans;
-        if (!answerText && firstSearchMessage.role === 'user') {
-          // user 메시지인 경우, 같은 conversation의 assistant 메시지 찾기
-          const assistantMessage = conversation.messages.find(
-            msg => msg.role === 'assistant' && msg.id === firstSearchMessage.id
-          );
-          if (assistantMessage && assistantMessage.ans) {
-            answerText = assistantMessage.ans;
-            console.log('✅ assistant 메시지에서 답변 찾음:', answerText.length, '자');
-          }
-        }
-        
         // 랭그래프 상태 설정 (대화 복원 시에는 즉시 완료 상태)
-        // 강제로 랭그래프 표시 (다른 채팅에서 돌아온 경우 대비)
         this.showRangraph = true;
         this.currentStep = 4; // 완료된 상태로 복원 (실시간 애니메이션 없음)
         this.originalInput = firstSearchMessage.question;
-        this.finalAnswer = answerText;
+        this.finalAnswer = firstSearchMessage.ans;
         this.extractedKeywords = firstSearchMessage.keyword;
-        this.extractedDbSearchTitle = firstSearchMessage.db_contents;  // db_contents로 변경
-        
-        console.log('✅ 랭그래프 기본 상태 설정 완료:', {
-          showRangraph: this.showRangraph,
-          currentStep: this.currentStep,
-          originalInput: this.originalInput,
-          finalAnswer: this.finalAnswer,
-          finalAnswerLength: this.finalAnswer ? this.finalAnswer.length : 0
-        });
+        this.extractedDbSearchTitle = firstSearchMessage.db_search_title;
         
         // LangGraph 전체 상태 복원 (비동기 처리)
         if (firstSearchMessage.keyword) {
@@ -728,59 +640,48 @@ export default {
           }
         }
         
-        // 검색 결과가 LangGraph 상태에서 복원되지 않은 경우에만 db_contents에서 복원
+        // 검색 결과가 LangGraph 상태에서 복원되지 않은 경우에만 db_search_title에서 복원
         if (!this.searchResults || this.searchResults.length === 0) {
-          if (firstSearchMessage.db_contents) {
+          if (firstSearchMessage.db_search_title) {
             try {
-              // db_contents가 JSON 배열인 경우 파싱
-              const dbContentsData = JSON.parse(firstSearchMessage.db_contents);
-              console.log('📦 db_contents 데이터:', dbContentsData);
-              
-              if (Array.isArray(dbContentsData) && dbContentsData.length > 0) {
-                this.searchResults = dbContentsData.map((content, index) => {
-                  console.log(`📄 문서 ${index + 1} 복원:`, {
-                    document_name: content.document_name,
-                    score: content.score,
-                    combined_score: content.combined_score,
-                    relevance_score: content.relevance_score,
-                    text: content.text?.substring(0, 50),
-                    summary_purpose: content.summary_purpose,
-                    summary_result: content.summary_result,
-                    summary_fb: content.summary_fb,
-                    image_url: content.image_url
-                  });
-                  
-                  return {
-                    id: `restored-${index}`,
-                    res_id: content.res_id || `restored-${index}`,
-                    res_score: content.score || 0,
-                    combined_score: content.combined_score || content.score || 0,
-                    res_relevance: content.relevance_score || 0,
-                    res_payload: {
-                      document_name: content.document_name,
-                      vector: {
-                        text: content.text || '',
-                        summary_purpose: content.summary_purpose || '',
-                        summary_result: content.summary_result || '',
-                        summary_fb: content.summary_fb || '',
-                        image_url: content.image_url || ''
-                      }
-                    }
-                  };
-                });
-                
-                console.log('✅ db_contents에서 검색 결과 복원 완료:', this.searchResults.length, '건');
-                console.log('📊 복원된 검색 결과:', this.searchResults);
-                
-                // db_contents에서 복원한 경우 랭그래프 표시 강제
-                if (!this.showRangraph) {
-                  this.showRangraph = true;
-                  this.currentStep = 4;
-                  console.log('✅ db_contents 복원으로 인한 랭그래프 표시 활성화');
-                }
+              // db_search_title이 JSON 배열인 경우 파싱
+              const titleData = JSON.parse(firstSearchMessage.db_search_title);
+              if (Array.isArray(titleData)) {
+                this.searchResults = titleData.map((title, index) => ({
+                  id: `restored-${index}`,
+                  res_id: `restored-${index}`,
+                  res_score: 0.8, // 기본 점수
+                  res_payload: {
+                    document_name: title,
+                    ppt_summary: '이전 세션에서 검색된 문서입니다.',
+                    ppt_content: '이전 세션에서 검색된 내용입니다.'
+                  }
+                }));
+              } else {
+                // 단일 문자열인 경우
+                this.searchResults = [{
+                  id: 'restored',
+                  res_id: 'restored',
+                  res_score: 0.8,
+                  res_payload: {
+                    document_name: firstSearchMessage.db_search_title,
+                    ppt_summary: '이전 세션에서 검색된 문서입니다.',
+                    ppt_content: '이전 세션에서 검색된 내용입니다.'
+                  }
+                }];
               }
             } catch (e) {
-              console.error('❌ db_contents 파싱 실패:', e);
+              // 파싱 실패 시 단일 문자열로 처리
+              this.searchResults = [{
+                id: 'restored',
+                res_id: 'restored',
+                res_score: 0.8,
+                res_payload: {
+                  document_name: firstSearchMessage.db_search_title,
+                  ppt_summary: '이전 세션에서 검색된 문서입니다.',
+                  ppt_content: '이전 세션에서 검색된 내용입니다.'
+                }
+              }];
             }
           }
         }
@@ -806,20 +707,14 @@ export default {
           extractedDbSearchTitle: this.extractedDbSearchTitle
         });
         
-        // 캐시 정보 업데이트 - 복원 완료 후
-        this.lastRestoredConversationId = conversation.id;
-        this.lastRestoredMessageCount = conversation.messages.length;
-        this.isRestoringConversation = false;
-        
         // 화면 업데이트 강제 실행
         this.$nextTick(() => {
           this.$forceUpdate();
-          console.log('✅ 화면 강제 업데이트 완료');
         });
         
       } else {
         console.log('LangGraph 정보가 있는 메시지가 없어 랭그래프 복원 불가');
-        console.log('대화에 메시지는 있지만 LangGraph 관련 정보(keyword, db_contents)가 없음');
+        console.log('대화에 메시지는 있지만 LangGraph 관련 정보(keyword, db_search_title)가 없음');
         
         // 모든 메시지가 q_mode: 'add'인지 확인 (추가 질문만 있는 대화)
         const allAddMessages = conversation.messages.every(msg => msg.q_mode === 'add');
@@ -1155,13 +1050,8 @@ export default {
           augmentedKeywords: [...(this.augmentedKeywords || [])],
           searchResults: [...(this.searchResults || [])],
           finalAnswer: this.finalAnswer,
-          analysisImageUrl: this.analysisImageUrl, // 이미지 URL 백업 추가
-          searchedDocuments: [...(this.searchedDocuments || [])],
-          hasSearchCompleted: this.hasSearchCompleted
+          analysisImageUrl: this.analysisImageUrl // 이미지 URL 백업 추가
         };
-        
-        // 랭그래프 영역 업데이트 방지 플래그 설정
-        this.isFollowupQuestion = true;
         
         // 먼저 사용자 질문을 즉시 화면에 표시
         const userMessage = {
@@ -1216,15 +1106,11 @@ export default {
           console.log('[FOLLOWUP] LangGraph UI 복원 완료');
         });
         
-        // 인증 토큰 가져오기
-        const token = localStorage.getItem('access_token');
-        
         // 추가 질문 스트리밍 API 호출
         const response = await fetch('http://localhost:8000/api/llm/langgraph/followup/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
           },
           body: JSON.stringify({
             question: inputText,
@@ -1308,13 +1194,7 @@ export default {
         console.log(`📡 추가 질문 스트리밍 최종 완료 - 총 ${chunkCount}개 청크 처리`);
         console.log(`📡 추가 질문 누적된 메시지: "${accumulatedMessage}"`);
         
-        // 스트리밍 완료
-        this.$store.commit('setIsStreaming', false);
-        
-        // 백엔드에 메시지 저장은 자동으로 처리됨 (get_streaming_response_with_db_save)
-        console.log('✅ 추가 질문 스트리밍 완료 - 백엔드에서 자동 저장됨');
-        
-        // 백엔드 저장 후 메시지 직접 추가 (화면 깜빡임 방지)
+        // 스트리밍된 메시지를 assistant 메시지로 현재 대화에 추가
         const assistantMessage = {
           id: Date.now() + 1,
           conversation_id: conversationId,
@@ -1324,8 +1204,15 @@ export default {
           created_at: new Date().toISOString()
         };
         
-        // 현재 대화에 assistant 메시지 추가 (화면 깜빡임 없이)
+        // 현재 대화에 assistant 메시지 추가
         this.$store.commit('addMessageToCurrentConversation', assistantMessage);
+        
+        // 스트리밍 완료
+        this.$store.commit('setIsStreaming', false);
+        
+        // 백엔드에 메시지 저장 (q_mode: 'add')
+        console.log('💾 추가 질문 메시지 저장 시작 - q_mode: add');
+        await this.saveAdditionalQuestionMessage(inputText, accumulatedMessage || '답변을 생성할 수 없습니다.');
         
         // LangGraph UI 상태 최종 복원 (저장 후에도 유지)
         this.showRangraph = langGraphBackup.showRangraph;
@@ -1335,11 +1222,6 @@ export default {
         this.searchResults = langGraphBackup.searchResults;
         this.finalAnswer = langGraphBackup.finalAnswer;
         this.analysisImageUrl = langGraphBackup.analysisImageUrl; // 이미지 URL 복원 추가
-        this.searchedDocuments = langGraphBackup.searchedDocuments;
-        this.hasSearchCompleted = langGraphBackup.hasSearchCompleted;
-        
-        // 랭그래프 영역 업데이트 방지 플래그 해제
-        this.isFollowupQuestion = false;
         
         console.log('[FOLLOWUP] 최종 LangGraph UI 상태 복원 완료');
         this.$nextTick(() => {
@@ -1349,11 +1231,24 @@ export default {
       } catch (error) {
         console.error('[FOLLOWUP] 추가 질문 처리 오류:', error);
         
+        // 오류 메시지를 assistant 메시지로 추가
+        const errorMessage = {
+          id: Date.now() + 2,
+          conversation_id: conversationId,
+          role: 'assistant',
+          question: inputText,
+          ans: `⚠️ **오류 발생**: ${error.message}`,
+          created_at: new Date().toISOString()
+        };
+        
+        // 현재 대화에 오류 메시지 추가
+        this.$store.commit('addMessageToCurrentConversation', errorMessage);
+        
         // 스트리밍 중단
         this.$store.commit('setIsStreaming', false);
         
-        // 오류 발생 시 사용자에게 알림
-        alert('추가 질문 처리 중 오류가 발생했습니다. 페이지를 새로고침하고 다시 시도해주세요.');
+        // 폴백으로 기존 방식 시도
+        await this.executeSimpleLLMFlow(inputText);
       } finally {
         this.isLoading = false;
       }
@@ -1999,14 +1894,10 @@ export default {
       // console.log('🔌 SSE AbortController 생성');
       
       try {
-        // 인증 토큰 가져오기
-        const token = localStorage.getItem('access_token');
-        
         const response = await fetch('http://localhost:8000/api/llm/langgraph/stream', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
           },
           body: JSON.stringify({
             question: inputText
@@ -2060,7 +1951,7 @@ export default {
                     throw new Error(parsedData.error);
                   }
                   
-                  // console.log('📡 SSE 데이터 처리:', parsedData);
+                  console.log('📡 SSE 데이터 처리:', parsedData);
                   this.handleSSEMessage(parsedData);
                   
                 } catch (parseError) {
@@ -2084,17 +1975,11 @@ export default {
     
     // SSE 메시지 처리
     handleSSEMessage(data) {
-      // console.log('📡 SSE 메시지 수신:', data);
-      // console.log('📡 메시지 단계:', data.stage);
-      // console.log('📡 메시지 상태:', data.status);
-      // console.log('📡 메시지 결과:', data.result);
-      // console.log('📡 현재 단계:', this.currentStep);
-
-      // 추가 질문 중에는 랭그래프 영역 업데이트 방지
-      if (this.isFollowupQuestion && (data.stage === 'A' || data.stage === 'B' || data.stage === 'C' || data.stage === 'D' || data.stage === 'E')) {
-        console.log('🔒 추가 질문 중 - 랭그래프 영역 업데이트 방지:', data.stage);
-        return;
-      }
+      console.log('📡 SSE 메시지 수신:', data);
+      console.log('📡 메시지 단계:', data.stage);
+      console.log('📡 메시지 상태:', data.status);
+      console.log('📡 메시지 결과:', data.result);
+      console.log('📡 현재 단계:', this.currentStep);
 
       // DONE 메시지 처리 후 즉시 종료
       if (data.stage === 'DONE') {
@@ -2297,7 +2182,7 @@ export default {
           console.log('✅ D단계 시작 UI 업데이트 완료');
         });
       } else if (data.stage === 'D' && data.status === 'streaming') {
-        // console.log('🔄 D단계: 답변 스트리밍 중 → UI 3단계');
+        console.log('🔄 D단계: 답변 스트리밍 중 → UI 3단계');
         this.currentStep = 3; // UI 3단계: 검색된 내용 기반 답변
         this.isGeneratingAnswer = false;
         this.isStreamingAnswer = true;
@@ -2356,7 +2241,6 @@ export default {
         
         if (imageUrl) {
           this.analysisImageUrl = imageUrl;
-          this.imageLoadFailed = false; // 이미지 로드 실패 플래그 리셋
           this.lastImageUrl = imageUrl; // 디버깅용 저장
           console.log('🖼️ 분석 이미지 URL 설정 완료:', this.analysisImageUrl);
           this.$forceUpdate(); // 강제 UI 업데이트
@@ -2492,7 +2376,6 @@ export default {
           
           if (imageUrl) {
             this.analysisImageUrl = imageUrl;
-            this.imageLoadFailed = false; // 이미지 로드 실패 플래그 리셋
             this.lastImageUrl = imageUrl; // 디버깅용 저장
             console.log('🖼️ WebSocket 분석 이미지 URL 설정 완료:', this.analysisImageUrl);
           } else {
@@ -2629,7 +2512,6 @@ export default {
             
             if (imageUrl) {
               this.analysisImageUrl = imageUrl;
-              this.imageLoadFailed = false; // 이미지 로드 실패 플래그 리셋
               this.lastImageUrl = imageUrl; // 디버깅용 저장
               console.log('🖼️ 직접 처리 - 분석 이미지 URL 설정 완료:', this.analysisImageUrl);
             } else {
@@ -2745,7 +2627,6 @@ export default {
           
           if (imageUrl) {
             this.analysisImageUrl = imageUrl;
-            this.imageLoadFailed = false; // 이미지 로드 실패 플래그 리셋
             this.lastImageUrl = imageUrl; // 디버깅용 저장
             console.log('🖼️ processDirectLangGraphResult - 분석 이미지 URL 설정 완료:', this.analysisImageUrl);
           } else {
@@ -3546,21 +3427,11 @@ LangGraph API 연결에 실패했습니다.
     // 이미지 로딩 에러 핸들링
     handleImageError(event) {
       console.warn('🖼️ 이미지 로딩 실패:', this.analysisImageUrl);
-      
-      // 즉시 이미지 로딩 중단
-      event.target.src = '';
-      event.target.onerror = null; // 재시도 방지
-      
-      // 실패한 URL을 저장하고 오류 상태 설정
-      this.failedImageUrl = this.analysisImageUrl;
+      // 실패한 URL을 lastImageUrl에 저장하고 analysisImageUrl을 초기화
       this.lastImageUrl = this.analysisImageUrl;
-      this.imageLoadFailed = true;
-      
-      // 이미지 요소 숨김 및 src 제거
+      this.analysisImageUrl = '';
       event.target.style.display = 'none';
-      event.target.removeAttribute('src');
-      
-      console.log('🖼️ 이미지 로딩 실패 - 오류 이미지 표시. 실패 URL:', this.failedImageUrl);
+      console.log('🖼️ 이미지 로딩 실패로 인해 URL 초기화. 마지막 시도 URL:', this.lastImageUrl);
     },
     
     // 스크롤 위치 안정화를 위한 메서드
@@ -3622,8 +3493,19 @@ LangGraph API 연결에 실패했습니다.
     '$store.state.streamingMessage'() {
       this.scrollToBottom(); // 통합된 쓰로틀링 사용
     },
-    // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원 (캐시 제거)
+    // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원 (최적화)
     '$store.state.currentConversation'(newConversation) {
+      // 메시지 캐시 업데이트
+      if (newConversation && newConversation.messages) {
+        this.cachedConversationId = newConversation.id;
+        this.cachedMessagesLength = newConversation.messages.length;
+        this.cachedMessages = newConversation.messages;
+      } else {
+        this.cachedMessages = null;
+        this.cachedConversationId = null;
+        this.cachedMessagesLength = 0;
+      }
+      
       // 기존 대화 선택 시 실시간 기능 비활성화
       if (this.$store.state.conversationRestored) {
         this.isNewConversation = false;

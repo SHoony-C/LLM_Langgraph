@@ -12,7 +12,7 @@ from ..schemas import TokenData
 # 설정
 SECRET_KEY = "your-super-secret-key-here-make-it-long-and-random-for-production"  # 실제 운영에서는 환경 변수로 처리
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 240  # 4시간 (4 * 60분)
 
 # 비밀번호 암호화
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

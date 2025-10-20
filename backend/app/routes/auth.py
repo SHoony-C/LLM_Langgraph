@@ -256,7 +256,7 @@ EXCHANGE_TTL_SEC = int(os.getenv("EXCHANGE_TTL_SEC", "60"))  # 60초
 
 # 교환 이후 최종 쿠키를 심을 퍼블릭 베이스 URL
 # 운영 값 예: https://report-collection
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://report-collection")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
 
 # =========================
 # 유틸: 세션/교환 토큰
@@ -322,40 +322,62 @@ def _resolve_current_user_from_request(request: Request, db: Session) -> User:
       2) Authorization: Bearer {token} (기존 access_token 경로)
     둘 중 하나 성공 시 DB 사용자 반환, 아니면 401
     """
+    print(f"[AUTH] 사용자 인증 시도 시작")
+    
     # 1) 세션 쿠키
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie:
+        print(f"[AUTH] 세션 쿠키 발견: {SESSION_COOKIE_NAME}")
         try:
             data = jwt.decode(cookie, SESSION_SIGN_SECRET, algorithms=["HS256"], options={"verify_aud": False})
             username = data.get("username")
             loginid = data.get("loginid")
             deptname = data.get("deptname")
+            print(f"[AUTH] 쿠키 데이터: username={username}, loginid={loginid}, deptname={deptname}")
+            
             user = None
             if loginid:
                 user = db.query(User).filter(User.loginid == loginid).first()
+                print(f"[AUTH] loginid로 사용자 검색 결과: {user is not None}")
             if not user and username:
                 user = db.query(User).filter(User.username == username).first()
-            if deptname:
+                print(f"[AUTH] username으로 사용자 검색 결과: {user is not None}")
+            if not user and deptname:
                 user = db.query(User).filter(User.deptname == deptname).first()
+                print(f"[AUTH] deptname으로 사용자 검색 결과: {user is not None}")
             if user:
+                print(f"[AUTH] 세션 쿠키로 사용자 인증 성공: {user.username}")
                 return user
-        except JWTError:
+        except JWTError as e:
+            print(f"[AUTH] 세션 쿠키 JWT 디코딩 실패: {str(e)}")
             pass  # 쿠키가 깨졌으면 Bearer 시도
+        except Exception as e:
+            print(f"[AUTH] 세션 쿠키 처리 중 예상치 못한 오류: {str(e)}")
+            pass
 
     # 2) Bearer
     bearer = _extract_bearer_token(request.headers)
     if bearer:
+        print(f"[AUTH] Bearer 토큰 발견")
         try:
             # 서명검증없이 sub만 뽑아 DB 조회(기존 access_token 호환 목적)
             payload = jwt.get_unverified_claims(bearer)
             sub = payload.get("sub")
+            print(f"[AUTH] Bearer 토큰 sub: {sub}")
             if sub:
                 user = db.query(User).filter(User.username == sub).first()
                 if user:
+                    print(f"[AUTH] Bearer 토큰으로 사용자 인증 성공: {user.username}")
                     return user
-        except Exception:
+                else:
+                    print(f"[AUTH] Bearer 토큰 sub에 해당하는 사용자 없음: {sub}")
+        except Exception as e:
+            print(f"[AUTH] Bearer 토큰 처리 중 오류: {str(e)}")
             pass
+    else:
+        print(f"[AUTH] Bearer 토큰 없음")
 
+    print(f"[AUTH] 모든 인증 방법 실패")
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 
@@ -365,8 +387,20 @@ def _resolve_current_user_from_request(request: Request, db: Session) -> User:
 @router.get("/me", response_model=UserSchema)
 async def read_users_me(request: Request, db: Session = Depends(get_db)):
     """현재 로그인된 사용자 정보 조회 (세션 쿠키 또는 Bearer 모두 지원)"""
-    user = _resolve_current_user_from_request(request, db)
-    return user
+    try:
+        user = _resolve_current_user_from_request(request, db)
+        return user
+    except HTTPException as e:
+        # 인증 실패 시 더 자세한 오류 정보 제공
+        print(f"[AUTH] /me 엔드포인트 인증 실패: {e.detail}")
+        raise e
+    except Exception as e:
+        # 예상치 못한 오류 처리
+        print(f"[AUTH] /me 엔드포인트 예상치 못한 오류: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.post("/logout")
@@ -491,6 +525,7 @@ def _extract_user_fields(decoded_token: Dict[str, Any]) -> Tuple[Optional[str], 
             return v or None
         return str(v)
 
+    # Extract email
     mail_candidates = [
         decoded_token.get("email"),
         decoded_token.get("mail"),
@@ -499,11 +534,17 @@ def _extract_user_fields(decoded_token: Dict[str, Any]) -> Tuple[Optional[str], 
     ]
     mail = next((m for m in map(_clean, mail_candidates) if m), None)
 
+    # Extract name (username)
     username_candidates = [
+        decoded_token.get("name"),
+        decoded_token.get("given_name"),
+        decoded_token.get("family_name"),
+        decoded_token.get("preferred_username"),
         decoded_token.get("loginid")
     ]
     username = next((u for u in map(_clean, username_candidates) if u), None)
 
+    # Extract loginid (sub)
     loginid_candidates = [
         decoded_token.get("sub"),
         decoded_token.get("oid"),
@@ -511,20 +552,34 @@ def _extract_user_fields(decoded_token: Dict[str, Any]) -> Tuple[Optional[str], 
         decoded_token.get("sid"),
         decoded_token.get("id"),
         decoded_token.get("subject"),
-        username,
     ]
     loginid = next((l for l in map(_clean, loginid_candidates) if l), None)
     deptname = decoded_token.get("deptname")
 
-    # print(f'''{username}, {mail}, {loginid}, {deptname}''')
+    print(f'Extracted fields - username: {username}, mail: {mail}, loginid: {loginid}, deptname: {deptname}')
 
     return username, mail, loginid, deptname
 
 
 def _upsert_user_from_id_token(db_session: Session, decoded_token: dict) -> User:
     username, mail, loginid, deptname = _extract_user_fields(decoded_token)
-    if not username or not loginid:
-        raise HTTPException(status_code=400, detail="Missing user information")
+    
+    # loginid는 필수 (Google OAuth의 경우 sub 필드)
+    if not loginid:
+        raise HTTPException(status_code=400, detail="Missing loginid (sub field)")
+    
+    # username이 없으면 email에서 추출하거나 loginid 사용
+    if not username:
+        if mail and '@' in mail:
+            username = mail.split('@')[0]  # email의 @ 앞부분을 username으로 사용
+        elif loginid:
+            username = loginid
+        else:
+            raise HTTPException(status_code=400, detail="Cannot determine username")
+    
+    # email이 없으면 기본값 설정
+    if not mail:
+        mail = ""
 
     db_user = db_session.query(User).filter(User.loginid == loginid).first()
 
@@ -545,7 +600,7 @@ def _upsert_user_from_id_token(db_session: Session, decoded_token: dict) -> User
 
     if not db_user:
         hashed_password = get_password_hash(str(uuid.uuid4()))
-        db_user = User(username=username, mail=mail or "", hashed_password=hashed_password, loginid=loginid, deptname=deptname)
+        db_user = User(username=username, mail=mail, hashed_password=hashed_password, loginid=loginid, deptname=deptname)
         db_session.add(db_user)
         db_session.commit()
         db_session.refresh(db_user)
@@ -575,12 +630,16 @@ def _upsert_user_from_id_token(db_session: Session, decoded_token: dict) -> User
 # =========================
 @router.get("/exchange")
 async def exchange(request: Request):
+    print(f"[EXCHANGE] Exchange endpoint called with request: {request.url}")
     x = request.query_params.get("x")
     if not x:
+        print("[EXCHANGE] Missing exchange token")
         raise HTTPException(status_code=400, detail="missing exchange token")
     try:
         payload = _decode_exchange_jwt(x)
+        print(f"[EXCHANGE] Successfully decoded exchange token: {payload}")
     except JWTError as e:
+        print(f"[EXCHANGE] Failed to decode exchange token: {e}")
         raise HTTPException(status_code=401, detail=f"invalid exchange: {e}")
 
     # 교환 페이로드 → 임시 사용자
@@ -613,89 +672,65 @@ async def exchange(request: Request):
         "mail": tmp.mail,
         "loginid": tmp.loginid,
         "deptname": tmp.deptname,
-        "userid": None
+        "userid": payload.get("uid")  # exchange 토큰에서 uid 사용
     }, ensure_ascii=False)
 
-    # 3) HTML로 localStorage 채우고 홈으로 이동
-    html = f"""<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <title>Signing you in…</title>
-  <meta http-equiv="Cache-Control" content="no-store" />
-  <script>
-  (async function() {{
-    function safeSet(k, v) {{
-      try {{ localStorage.setItem(k, v); }} catch (e) {{}}
-    }}
-    function safeSetSession(k, v) {{
-      try {{ sessionStorage.setItem(k, v); }} catch (e) {{}}
-    }}
+    # 3) 직접 프론트엔드로 리다이렉트하면서 쿠키 설정
+    redirect_response = RedirectResponse(url="http://localhost:8080/", status_code=302)
 
-    // ★ 꼭 JWT 문자열이어야 함 (앞 3글자 'eyJ'로 시작)
-    var jwt = {json.dumps(access_token)};
-    var initialUser = {json.dumps(user_json)};
-
-    safeSet('access_token', jwt);
-    safeSet('user_info', initialUser);
-    safeSetSession('sso_processed', 'true');
-
-    // 정확한 사용자 정보 보강
-    try {{
-      const r = await fetch('/api/auth/me', {{ credentials: 'include' }});
-      if (r.ok) {{
-        const u = await r.json();
-        const fullUser = {{
-          username: u.username,
-          mail: u.mail || '',
-          loginid: u.loginid || '',
-          userid: u.id,
-          deptname: u.deptname
-        }};
-        safeSet('user_info', JSON.stringify(fullUser));
-      }}
-    }} catch (e) {{}}
-
-    // 홈으로 이동
-    location.replace('/');
-  }})();
-  </script>
-</head>
-<body>
-  <noscript>Authentication complete. <a href="/">Go to home</a></noscript>
-</body>
-</html>"""
-
-    resp = HTMLResponse(html, status_code=200)
-
-    # 세션 쿠키(인증용, HttpOnly)
-    resp.set_cookie(
+    # 세션 쿠키(인증용, HttpOnly) - 백엔드 도메인용
+    redirect_response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_jwt,
         httponly=True,
-        secure=True,
+        secure=False,  # localhost에서는 false
         samesite="lax",
         max_age=60 * 60 * 8,
-        path="/"
+        path="/",
+        domain="localhost"  # 모든 localhost 서브도메인에서 접근 가능
     )
 
-    # 접근성 보강: FE가 혹시 localStorage를 초기화해도 읽을 수 있게 비-HttpOnly 쿠키도 함께(선택)
-    resp.set_cookie(
+    # 프론트엔드에서 읽을 수 있는 쿠키들
+    redirect_response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=False,
-        secure=True,
+        secure=False,  # localhost에서는 false
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/"
+        path="/",
+        domain="localhost"
+    )
+    
+    redirect_response.set_cookie(
+        key="user_info",
+        value=urllib.parse.quote(user_json),  # URL 인코딩
+        httponly=False,
+        secure=False,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+        domain="localhost"
+    )
+    
+    redirect_response.set_cookie(
+        key="sso_processed",
+        value="true",
+        httponly=False,
+        secure=False,
+        samesite="lax",
+        max_age=60 * 60,  # 1시간
+        path="/",
+        domain="localhost"
     )
 
-    # 캐시 무효화 헤더
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-
-    return resp
+    return redirect_response
+    
+    # 대안: 직접 프론트엔드로 리다이렉트 (위의 HTML 방식이 작동하지 않는 경우)
+    # redirect_response = RedirectResponse(url="http://localhost:8080/", status_code=302)
+    # redirect_response.set_cookie(key=SESSION_COOKIE_NAME, value=session_jwt, httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 8, path="/")
+    # redirect_response.set_cookie(key="access_token", value=access_token, httponly=False, secure=True, samesite="lax", max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60, path="/")
+    # return redirect_response
 
 
 # =========================
@@ -743,7 +778,7 @@ async def acs(request: Request):
                     "verify_at_hash": False,
                 },
             )
-            # print(decoded_token)
+            print(f"Decoded JWT token: {decoded_token}")
         except Exception as exc:
             err = JSONResponse({"success": False, "error": "Token decoding failed", "details": str(exc)}, status_code=400)
             return _apply_cors_headers(err, request)
@@ -755,6 +790,7 @@ async def acs(request: Request):
             # ★ ACS에서는 세션 쿠키를 심지 않음 ★
             x = _mint_exchange_jwt(db_user)
             exchange_url = f"{PUBLIC_BASE_URL}/api/auth/exchange?x={urllib.parse.quote(x)}"
+            print(f"[ACS] Redirecting to exchange URL: {exchange_url}")
             return RedirectResponse(url=exchange_url, status_code=303)
         finally:
             try:
@@ -793,6 +829,7 @@ async def acs(request: Request):
                             "verify_at_hash": False,
                         },
                     )
+                    print(f"Decoded JWT token (GET): {decoded_token}")
                 except Exception as exc:
                     return RedirectResponse(
                         url=f"{config.IDP_Config['Frontend_Redirect_Uri']}?error=Token+processing+failed&msg={str(exc)}",
@@ -805,6 +842,7 @@ async def acs(request: Request):
                     db_user = _upsert_user_from_id_token(db_session, decoded_token)
                     x = _mint_exchange_jwt(db_user)
                     exchange_url = f"{PUBLIC_BASE_URL}/api/auth/exchange?x={urllib.parse.quote(x)}"
+                    print(f"[ACS-GET] Redirecting to exchange URL: {exchange_url}")
                     return RedirectResponse(url=exchange_url, status_code=303)
                 finally:
                     try:

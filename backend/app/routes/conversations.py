@@ -127,6 +127,9 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
         
         # 각 메시지를 user와 assistant로 분리하여 추가
         for message in conversation.messages:
+            # 디버깅: 메시지 정보 출력
+            print(f"[CONVERSATION] 메시지 {message.id}: role={message.role}, q_mode={message.q_mode}, ans 길이={len(message.ans) if message.ans else 0}")
+            
             # User 메시지 추가 (랭그래프 정보 포함)
             user_message = {
                 "id": message.id,
@@ -138,13 +141,14 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                 "user_name": message.user_name,
                 "q_mode": message.q_mode,  # 랭그래프 모드 추가
                 "keyword": message.keyword,  # 키워드 추가
-                "db_search_title": message.db_search_title,  # 문서 검색 타이틀 추가
+                "db_contents": message.db_contents,  # 검색 결과 전체 정보 추가
                 "image": message.image  # 이미지 URL 추가
             }
             conv_dict["messages"].append(user_message)
             
             # Assistant 메시지 추가 (답변이 있는 경우에만)
             if message.ans:
+                print(f"[CONVERSATION] Assistant 메시지 추가: ID={message.id}, ans 길이={len(message.ans)}")
                 assistant_message = {
                     "id": message.id,  # 실제 데이터베이스 메시지 ID 사용
                     "role": "assistant", 
@@ -155,13 +159,15 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
                     "created_at": message.created_at,
                     "q_mode": message.q_mode,  # 랭그래프 모드 추가
                     "keyword": message.keyword,  # 키워드 추가
-                    "db_search_title": message.db_search_title,  # 문서 검색 타이틀 추가
+                    "db_contents": message.db_contents,  # 검색 결과 전체 정보 추가
                     "image": message.image  # 이미지 URL 추가
                 }
                 conv_dict["messages"].append(assistant_message)
+            else:
+                print(f"[CONVERSATION] ⚠️ 메시지 {message.id}: ans가 비어있음")
         
         # LangGraph 정보 확인 (간소화된 로그)
-        has_langgraph = any(msg.get('keyword') or msg.get('db_search_title') for msg in conv_dict['messages'])
+        has_langgraph = any(msg.get('keyword') or msg.get('db_contents') for msg in conv_dict['messages'])
         if has_langgraph:
             print(f"[CONVERSATION] 📊 대화 {conversation.id}: LangGraph 정보 포함")
         
@@ -278,7 +284,7 @@ async def create_message(
         user_name=user_name,
         q_mode=message_request.q_mode,
         keyword=message_request.keyword,
-        db_search_title=message_request.db_search_title,
+        db_contents=message_request.db_contents,
         image=message_request.image
     )
     
@@ -334,7 +340,7 @@ def find_related_conversations(
     
     # 현재 대화에 LangGraph 정보가 있는지 먼저 확인
     has_langgraph_info = any(
-        msg.keyword or msg.db_search_title or msg.q_mode in [None, 'search']
+        msg.keyword or msg.db_contents or msg.q_mode in [None, 'search']
         for msg in current_messages
     )
     
@@ -358,7 +364,7 @@ def find_related_conversations(
     for conversation in other_conversations:
         for message in conversation.messages:
             # LangGraph 정보가 있는 메시지 확인
-            if message.keyword or message.db_search_title or message.q_mode in [None, 'search']:
+            if message.keyword or message.db_contents or message.q_mode in [None, 'search']:
                 # 관련 대화 정보 반환 (메시지 포함)
                 conv_dict = {
                     "id": conversation.id,
@@ -379,7 +385,7 @@ def find_related_conversations(
                         "user_name": msg.user_name,
                         "q_mode": msg.q_mode,
                         "keyword": msg.keyword,
-                        "db_search_title": msg.db_search_title,
+                        "db_contents": msg.db_contents,
                         "image": msg.image
                     }
                     conv_dict["messages"].append(user_message)
@@ -396,7 +402,7 @@ def find_related_conversations(
                             "created_at": msg.created_at,
                             "q_mode": msg.q_mode,
                             "keyword": msg.keyword,
-                            "db_search_title": msg.db_search_title,
+                            "db_contents": msg.db_contents,
                             "image": msg.image
                         }
                         conv_dict["messages"].append(assistant_message)

@@ -1,12 +1,12 @@
 from typing import List, Optional
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from fastapi import Form
 
 # 사용자 스키마
 class UserBase(BaseModel):
     username: str
-    mail: EmailStr
+    mail: Optional[str] = None  # EmailStr에서 Optional[str]로 변경하여 None 허용
     deptname: Optional[str] = None
 
 class UserCreate(UserBase):
@@ -90,7 +90,7 @@ class MessageBase(BaseModel):
     ans: Optional[str] = None
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
-    db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    db_contents: Optional[str] = None  # 검색 결과 전체 정보
     image: Optional[str] = None  # 이미지 URL
     feedback: Optional[str] = None
 
@@ -102,7 +102,7 @@ class MessageCreate(BaseModel):
     assistant_response: Optional[str] = None
     user_name: Optional[str] = None
     keyword: Optional[str] = None  # 키워드 정보
-    db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    db_contents: Optional[str] = None  # 검색 결과 전체 정보
     image: Optional[str] = None  # 이미지 URL
     skip_llm: Optional[bool] = False  # LLM 재호출 방지 플래그
 
@@ -137,7 +137,7 @@ class MessageRequest(BaseModel):
     assistant_response: Optional[str] = None  # 이미 생성된 답변 (skip_llm이 true일 때 사용)
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
-    db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    db_contents: Optional[str] = None  # 검색 결과 전체 정보
     image: Optional[str] = None  # 이미지 URL
 
 class FeedbackRequest(BaseModel):
@@ -148,7 +148,7 @@ class MessageResponse(BaseModel):
     assistantMessage: Message
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
-    db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    db_contents: Optional[str] = None  # 검색 결과 전체 정보
     
     class Config:
         orm_mode = True 
