@@ -1,14 +1,16 @@
 import os
-# from dotenv import load_dotenv  # 주석 처리
+from dotenv import load_dotenv  
 
 # Load environment variables
-# load_dotenv()  # 주석 처리
+load_dotenv()  # 주석 처리
 
 # OpenAI Configuration
-OPENAI_API_KEY = "sk-"  # 실제 OpenAI API 키로 교체하세요  
-CUSTOM_LLAMA_API_KEY = ""
-CUSTOM_LLAMA_API_ENDPOINT = ""
-CUSTOM_LLAMA_API_BASE = ""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "aaa")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "aaa")
+
+IMAGE_BASE_URL = "https://10.172.107.182"
+IMAGE_PATH_PREFIX = "/imageview"
+
 
 # Database Configuration
 DATABASE_URL = "sqlite:///./app.db"
@@ -27,32 +29,28 @@ if all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
 # JWT Configuration
 SECRET_KEY = "your-secret-key-here"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 300
 
-# Redis Configuration
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-REDIS_CHANNEL = "langgraph_node_status"
 
 # Vector Database Configuration
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-QDRANT_COLLECTION = "ppt_parsed"
+QDRANT_HOST = "10.172.107.182"
+QDRANT_PORT = 8001
+QDRANT_COLLECTION = "RC"
 
 
 # Server Configuration
 HOST = "0.0.0.0"
-PORT = 8001
+PORT = 8000
 
 # OAuth/IDP Configuration
 IDP_Config = {
-    'ClientId': '844891853332-s785qgm7br1io04pbvtpsic4kqce8d7o.apps.googleusercontent.com',  # Google OAuth Client ID
-    'RedirectUri': 'http://localhost:8001/api/auth/acs',  # Callback URL
-    'AuthorizeUrl': 'https://accounts.google.com/o/oauth2/v2/auth',  # Google OAuth endpoint (초기 로그인에만 사용)
-    'CertFile_Path': './certificates/',  # Directory where certificates are stored
+    'ClientId': '2818c60e-bf0a-42f2-9b9b-d6ab18063844',  
+    'RedirectUri': 'https://10.172.117.173/api/auth/acs',  # Callback URL
+    'AuthorizeUrl': 'https://stsds.secsso.net/adfs/oauth2/authorize/',  
+    'CertFile_Path': '../certificates/',  # Directory where certificates are stored
     'CertFile_Name': 'public_key.pem',  # Public key file name for JWT verification
-    'Frontend_Redirect_Uri': 'http://localhost:8081/',  # Frontend URL to redirect after auth
-    'Scopes': 'openid email profile',  # OAuth scopes
-    'ResponseType': 'id_token',  # OAuth response type (implicit flow with id_token only)
+    'Frontend_Redirect_Uri': 'https://Report-Collection',  # Frontend URL to redirect after auth
+    'Scopes': 'openid profile',  # OAuth scopes
+    'ResponseType': 'code id_token',  # OAuth response type (implicit flow with id_token only)
     'UsePublicClient': True,  # Set to True for public client (no client secret)
 } 
