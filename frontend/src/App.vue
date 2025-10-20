@@ -69,43 +69,39 @@
               </div>
               <div class="user-popup-info">
                 <div class="user-popup-name">{{ currentUser ? currentUser.username : 'No Username' }}</div>
-                <div class="user-popup-email">{{ currentUser ? (currentUser.mail || 'No Email') : 'No Email' }}</div>
-                <div class="user-popup-details">{{ currentUser ? (currentUser.loginid || currentUser.id || 'No ID') : 'No Details' }}</div>
+                <div class="user-popup-email">{{ currentUser ? (currentUser.email || 'No Email') : 'No Email' }}</div>
+                <div class="user-popup-email">{{ currentUser ? (currentUser.deptname || 'No deptname') : 'No deptname' }}</div>
               </div>
             </div>
             <div class="user-popup-menu">
-              <div class="menu-item" @click="showApiKeyModal = true">
-                <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
-                </svg>
-                Set OpenAI API Key
-              </div>
-              <div class="menu-item" @click="showLlamaApiModal = true">
-                <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
-                </svg>
-                Set Custom Llama API
-              </div>
-              <div class="menu-item">
+              <a
+                href="https://go/nrdvoc"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="menu-item"
+                style="text-decoration:none; color:inherit; cursor:pointer; position:relative; z-index:10;"
+                onclick="event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation(); window.open(this.href, '_blank', 'noopener'); return false;"
+              >
                 <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
                   <circle cx="12" cy="7" r="4"></circle>
                 </svg>
-                Profile Settings
-              </div>
-              <div class="menu-item">
+                User VOE
+              </a>
+              <a
+                href="https://confluence.samsungds.net/spaces/DAE/pages/2420017795/%EB%B6%88%EB%B0%B1+%EA%B0%9C%EB%B0%9C+%ED%98%84%ED%99%A9%ED%8C%90"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="menu-item"
+                style="text-decoration:none; color:inherit; cursor:pointer; position:relative; z-index:10;"
+                onclick="event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation(); window.open(this.href, '_blank', 'noopener'); return false;"
+              >
                 <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                   <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                 </svg>
-                Add Links
-              </div>
-              <div class="menu-item">
-                <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                </svg>
-                Security
-              </div>
+                RC Info
+              </a>
               <div class="menu-item" @click="logout">
                 <svg class="menu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
@@ -229,6 +225,7 @@
 </template>
 
 <script>
+
 export default {
   name: 'App',
   data() {
@@ -290,7 +287,7 @@ export default {
     },
     async logout() {
       try {
-        console.log('[APP] 로그아웃 시작');
+        // console.log('[APP] 로그아웃 시작');
         
         // 사용자 팝업 닫기
         this.isUserPopupOpen = false;
@@ -299,7 +296,7 @@ export default {
         const jwtToken = localStorage.getItem('access_token');
         if (jwtToken) {
           try {
-            await fetch('http://localhost:8001/api/auth/logout', {
+            await fetch('https://report-collection/api/auth/logout', {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${jwtToken}`,
@@ -315,16 +312,25 @@ export default {
         // Vuex store의 logout action 실행 (토큰 및 상태 정리)
         await this.$store.dispatch('logout');
         console.log('[APP] 클라이언트 상태 정리 완료');
-        
-        // 로그아웃 플래그 설정 (자동 리다이렉트 방지용)
-        sessionStorage.setItem('logout_redirect', 'true');
-        
+                
         // OAuth 처리 플래그 초기화
         sessionStorage.removeItem('oauth_processing');
         sessionStorage.removeItem('sso_processed');
+        sessionStorage.removeItem('logout_redirect');
         
-        // 로그아웃 완료 후 현재 페이지에서 대기
-        console.log('[APP] 로그아웃 완료 - 사용자 액션 대기');
+        // 로그아웃 완료 후 즉시 SSO 로그인으로 리다이렉트
+        console.log('[APP] 로그아웃 완료 - SSO 로그인으로 리다이렉트');
+        setTimeout(() => {
+          try {
+            window.location.replace('https://report-collection/api/auth/auth_sh');
+          } catch (error) {
+            try {
+              window.location.href = 'https://report-collection/api/auth/auth_sh';
+            } catch (error2) {
+              console.error('SSO 리다이렉트 실패:', error2);
+            }
+          }
+        }, 500); // 0.5초 후 리다이렉트
         
       } catch (error) {
         console.error('[APP] 로그아웃 처리 중 오류:', error);
@@ -335,10 +341,22 @@ export default {
         // 강제로 상태 정리
         this.$store.dispatch('logout');
         
-        // 로그아웃 플래그 설정
-        sessionStorage.setItem('logout_redirect', 'true');
         sessionStorage.removeItem('oauth_processing');
         sessionStorage.removeItem('sso_processed');
+        sessionStorage.removeItem('logout_redirect');
+        
+        // 에러 발생 시에도 SSO 로그인으로 리다이렉트
+        setTimeout(() => {
+          try {
+            window.location.replace('https://report-collection/api/auth/auth_sh');
+          } catch (error) {
+            try {
+              window.location.href = 'https://report-collection/api/auth/auth_sh';
+            } catch (error2) {
+              console.error('SSO 리다이렉트 실패:', error2);
+            }
+          }
+        }, 500);
       }
     },
     async saveApiKey() {
@@ -368,7 +386,7 @@ export default {
           return;
         }
         
-        const response = await fetch('http://localhost:8001/api/auth/me', {
+        const response = await fetch('https://report-collection/api/auth/me', {
           headers: { 'Authorization': `Bearer ${jwtToken}` }
         });
         
@@ -376,8 +394,11 @@ export default {
           console.log('토큰 검증 실패:', response.status);
           this.$store.dispatch('logout');
         } else {
-          // 인증된 사용자의 대화 목록 가져오기
-          this.$store.dispatch('fetchConversations');
+          // 인증된 사용자의 대화 목록 가져오기 (중복 호출 방지)
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations');
+          }
         }
       } catch (error) {
         console.error('토큰 검증 중 오류:', error);
@@ -401,6 +422,9 @@ export default {
       // 대화를 store에 설정 (랭그래프 복원 트리거)
       this.$store.commit('setCurrentConversation', conversation);
       this.$store.commit('setShouldScrollToBottom', true);
+
+      // Home 컴포넌트에 기존 대화 선택 신호 전송 (실시간 기능 비활성화용)
+      this.$store.commit('setConversationRestored', true);
       
       console.log('setCurrentConversation 호출 완료, store 상태:', {
         currentConversation: this.$store.state.currentConversation,
@@ -494,36 +518,66 @@ export default {
       }
     },
     enableCopying() {
-      // 모든 요소에서 복사 차단 방지
-      document.addEventListener('selectstart', (e) => {
+      // 모든 복사 관련 이벤트 허용
+      const allowEvent = (e) => {
         e.stopPropagation();
         return true;
-      });
+      };
       
-      document.addEventListener('contextmenu', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      // 선택 시작 이벤트 허용
+      document.addEventListener('selectstart', allowEvent, { capture: true, passive: false });
+      
+      // 우클릭 컨텍스트 메뉴 허용
+      document.addEventListener('contextmenu', allowEvent, { capture: true, passive: false });
       
       // 복사 이벤트 허용
-      document.addEventListener('copy', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      document.addEventListener('copy', allowEvent, { capture: true, passive: false });
       
-      // 선택 이벤트 허용
-      document.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        return true;
-      });
+      // 마우스 이벤트 허용
+      document.addEventListener('mousedown', allowEvent, { capture: true, passive: false });
+      document.addEventListener('mouseup', allowEvent, { capture: true, passive: false });
+      document.addEventListener('mousemove', allowEvent, { capture: true, passive: false });
       
-      console.log('복사 기능이 활성화되었습니다.');
+      // 키보드 복사 단축키 허용 (Ctrl+C, Ctrl+A)
+      document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          if (e.key === 'c' || e.key === 'C' || e.key === 'a' || e.key === 'A' || e.key === 'v' || e.key === 'V') {
+            e.stopPropagation();
+            return true;
+          }
+        }
+        return true;
+      }, { capture: true, passive: false });
+      
+      // 드래그 이벤트 허용
+      document.addEventListener('dragstart', allowEvent, { capture: true, passive: false });
+      
+      // CSS 스타일로 복사 허용 강제 적용
+      const style = document.createElement('style');
+      style.textContent = `
+        * {
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
+          user-select: text !important;
+          -webkit-touch-callout: default !important;
+        }
+        button, .btn, .action-btn, .send-btn, .toggle-sidebar-btn, 
+        .new-chat-btn, .delete-btn, .close-btn {
+          -webkit-user-select: none !important;
+          -moz-user-select: none !important;
+          -ms-user-select: none !important;
+          user-select: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+      
     },
     handleSSOCallback() {
       // URL에서 토큰 파라미터 확인 (백엔드 /acs에서 리다이렉트된 경우)
       const urlParams = new URLSearchParams(window.location.search);
       const token = urlParams.get('token');
-      const user = urlParams.get('user');
+      const user = urlParams.get('username');
       const error = urlParams.get('error');
       
       if (error) {
@@ -546,10 +600,12 @@ export default {
       }
       
       if (token && user) {
+        console.log('사용자 정보 전체 : ', urlParams)
         // 추가 사용자 정보 가져오기
         const mail = urlParams.get('mail') || '';
         const loginid = urlParams.get('loginid') || '';
-        const userid = urlParams.get('userid') || '';
+        const username = urlParams.get('username') || '';
+        const deptname = urlParams.get('deptname') || '';
         
         // 토큰을 스토어에 저장하고 로그인 상태로 설정
         this.$store.commit('setAuth', { 
@@ -557,10 +613,15 @@ export default {
           user: { 
             username: user, 
             mail: mail, 
-            loginid: loginid,
-            id: userid || loginid || user // userid가 있으면 사용, 없으면 loginid, 없으면 username 사용
+            loginid: username,
+            id: loginid,
+            deptname : deptname
           } 
         });
+
+        // 로그인 후 새 대화 플래그 설정
+        this.$store.commit('setLoginNewConversation', true);
+        
         
         // 사용자 정보가 제대로 설정되었는지 확인하고, 필요시 백엔드에서 새로 가져오기
         setTimeout(() => {
@@ -588,12 +649,12 @@ export default {
         // OAuth 처리 중 플래그 제거
         sessionStorage.removeItem('oauth_processing');
         
-        console.log('[APP] handleSSOCallback - OAuth 처리 완료 플래그 설정됨');
+        // console.log('[APP] handleSSOCallback - OAuth 처리 완료 플래그 설정됨');
         
         return true; // 토큰 처리 완료
       }
       
-      // Google OAuth 코드가 있는 경우 (표준 OAuth 흐름)
+      // samsung OAuth 코드가 있는 경우 (표준 OAuth 흐름)
       const code = urlParams.get('code');
       const state = urlParams.get('state');
       
@@ -607,7 +668,7 @@ export default {
         sessionStorage.setItem('oauth_processing', 'true');
         
         // 백엔드의 /acs 엔드포인트로 리다이렉트하여 처리
-        window.location.href = `http://localhost:8001/api/auth/acs?code=${code}&state=${state}`;
+        window.location.href = `https://report-collection/api/auth/acs?code=${code}&state=${state}`;
         return true; // OAuth 처리 진행 중
       }
       
@@ -625,7 +686,7 @@ export default {
       // 백엔드로 토큰 전송
       const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
       
-      fetch('http://localhost:8001/api/auth/acs', {
+      fetch('https://report-collection/api/auth/acs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -650,7 +711,10 @@ export default {
               token: data.token || idToken, // 백엔드에서 토큰을 반환하지 않는 경우 idToken 사용
               user: data.user
             });
-            
+
+            // 로그인 후 새 대화 플래그 설정
+            this.$store.commit('setLoginNewConversation', true);
+                        
             // URL 해시 정리
             const url = new URL(window.location);
             url.hash = '';
@@ -663,7 +727,7 @@ export default {
             sessionStorage.setItem('sso_processed', 'true');
             sessionStorage.removeItem('oauth_processing');
             
-            console.log('[APP] processOAuthFromHash - OAuth 처리 완료 플래그 설정됨');
+            // console.log('[APP] processOAuthFromHash - OAuth 처리 완료 플래그 설정됨');
             
             // 페이지 리로드 없이 인증 상태 업데이트
             this.$forceUpdate();
@@ -696,7 +760,7 @@ export default {
       if (code && idToken) {
         const requestBody = `code=${encodeURIComponent(code)}&id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
 
-        fetch('http://localhost:8001/api/auth/acs', {
+        fetch('https://report-collection/api/auth/acs', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -720,6 +784,10 @@ export default {
                 token: data.token || idToken,
                 user: data.user
               });
+
+              // 로그인 후 새 대화 플래그 설정
+              this.$store.commit('setLoginNewConversation', true);
+
 
               const url = new URL(window.location);
               url.search = '';
@@ -771,7 +839,10 @@ export default {
           token: accessToken,
           user: userInfo
         });
-        
+
+        // 로그인 후 새 대화 플래그 설정
+        this.$store.commit('setLoginNewConversation', true);
+                
         // 대화 목록 가져오기
         this.$store.dispatch('fetchConversations');
         
@@ -784,13 +855,13 @@ export default {
   async created() {
     // OAuth 처리 중인 경우 중복 처리 방지
     if (sessionStorage.getItem('oauth_processing') === 'true') {
-      console.log('[APP] OAuth 처리 중 - created 라이프사이클 중단');
+      // console.log('[APP] OAuth 처리 중 - created 라이프사이클 중단');
       return; // 추가 처리 중단
     }
     
     // SSO 처리 완료된 경우 중복 처리 방지
     if (sessionStorage.getItem('sso_processed') === 'true') {
-      console.log('[APP] SSO 처리 완료됨 - created 라이프사이클 중단');
+      // console.log('[APP] SSO 처리 완료됨 - created 라이프사이클 중단');
       return;
     }
     
@@ -801,7 +872,7 @@ export default {
     const hasOAuthInQuery = currentUrlParams.get('code') || currentUrlParams.get('id_token') || currentUrlParams.get('error');
     
     if (hasOAuthInHash || hasOAuthInQuery) {
-      console.log('[APP] OAuth 파라미터 발견 - OAuth 처리 우선 진행, created 라이프사이클 중단');
+      // console.log('[APP] OAuth 파라미터 발견 - OAuth 처리 우선 진행, created 라이프사이클 중단');
       
       // OAuth 처리가 진행 중임을 표시
       sessionStorage.setItem('oauth_processing', 'true');
@@ -813,20 +884,20 @@ export default {
     // 먼저 쿠키에서 인증 정보 확인
     const hasAuthCookies = this.checkAuthCookies();
     if (hasAuthCookies) {
-      console.log('[APP] 쿠키에서 인증 정보 복원됨');
+      // console.log('[APP] 쿠키에서 인증 정보 복원됨');
       return;
     }
     
-    // URL 해시에서 OAuth 파라미터 확인 (Google OAuth 콜백)
+    // URL 해시에서 OAuth 파라미터 확인 (samsung OAuth 콜백)
     if (currentHash && currentHash.includes('id_token')) {
-      console.log('[APP] URL 해시에서 OAuth 파라미터 발견 - 처리 시작');
+      // console.log('[APP] URL 해시에서 OAuth 파라미터 발견 - 처리 시작');
       this.processOAuthFromHash(currentHash);
       return;
     }
     
     // URL 쿼리 파라미터에서 OAuth 콜백 확인
     if (hasOAuthInQuery) {
-      console.log('[APP] URL 쿼리에서 OAuth 파라미터 발견 - 처리 시작');
+      // console.log('[APP] URL 쿼리에서 OAuth 파라미터 발견 - 처리 시작');
       this.processOAuthFromQuery(currentUrlParams);
       return;
     }
@@ -836,7 +907,7 @@ export default {
     
     // SSO 콜백으로 토큰을 받은 경우 중복 인증 체크를 건너뜀
     if (hasToken) {
-      console.log('[APP] SSO 콜백 처리됨 - 추가 처리 중단');
+      // console.log('[APP] SSO 콜백 처리됨 - 추가 처리 중단');
       return;
     }
     
@@ -853,20 +924,23 @@ export default {
           user: userData
         });
         
-        console.log('[APP] localStorage에서 인증 상태 복원됨');
+        // console.log('[APP] localStorage에서 인증 상태 복원됨');
         
         // 토큰 유효성 검사
-        const response = await fetch('http://localhost:8001/api/auth/me', {
+        const response = await fetch('https://report-collection/api/auth/me', {
           headers: { 'Authorization': `Bearer ${jwtToken}` }
         });
         
         if (response.ok) {
-          console.log('[APP] 토큰 유효성 검사 통과');
-          // 인증된 사용자의 대화 목록 가져오기
-          this.$store.dispatch('fetchConversations');
+          // console.log('[APP] 토큰 유효성 검사 통과');
+          // 인증된 사용자의 대화 목록 가져오기 (중복 호출 방지)
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations');
+          }
           return;
         } else {
-          console.log('[APP] 토큰 만료됨 - 로그아웃 처리');
+          // console.log('[APP] 토큰 만료됨 - 로그아웃 처리');
           this.$store.dispatch('logout');
         }
       } catch (error) {
@@ -878,7 +952,7 @@ export default {
     // 로그아웃 플래그 정리
     const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
     if (isLogoutRedirect) {
-      console.log('[APP] 로그아웃 직후 - 플래그 정리');
+      // console.log('[APP] 로그아웃 직후 - 플래그 정리');
       sessionStorage.removeItem('logout_redirect');
       return; // 로그아웃 직후에는 자동 리다이렉트 방지
     }
@@ -889,17 +963,17 @@ export default {
     const isProcessingOAuth = sessionStorage.getItem('oauth_processing') === 'true';
     
     if (!hasProcessedOAuth && !isProcessingOAuth) {
-      // 인증되지 않은 상태에서만 Google SSO로 리다이렉트
+      // 인증되지 않은 상태에서만 samsung SSO로 리다이렉트
       if (!this.$store.state.isAuthenticated) {
         const hasLocalAuth = localStorage.getItem('access_token') && localStorage.getItem('user_info');
         if (!hasLocalAuth) {
-          console.log('[APP] 인증되지 않음 - Google SSO로 리다이렉트');
+          // console.log('[APP] 인증되지 않음 - SSO로 리다이렉트');
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8001/api/auth/auth_sh');
+              window.location.replace('https://report-collection/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8001/api/auth/auth_sh';
+                window.location.href = 'https://report-collection/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }
@@ -908,10 +982,11 @@ export default {
         }
       }
     } else {
-      console.log('[APP] OAuth 처리 완료 또는 진행 중 - 자동 리다이렉트 건너뛰기');
+      // console.log('[APP] OAuth 처리 완료 또는 진행 중 - 자동 리다이렉트 건너뛰기');
     }
   },
   mounted() {
+    // console.log('현재 사용자 정보:', this.currentUser)
     // 참조가 존재하는지 확인 후 접근
     if (this.$refs.inputField) {
       this.$refs.inputField.focus();
@@ -945,12 +1020,15 @@ export default {
           });
           
           // 인증 상태 복원 후 대화 목록 가져오기
-          console.log('[APP] 인증 상태 복원 후 대화 목록 가져오기');
-          this.$store.dispatch('fetchConversations').then(() => {
-            console.log('[APP] mounted에서 대화 목록 가져오기 완료');
-          }).catch(error => {
-            console.error('[APP] mounted에서 대화 목록 가져오기 실패:', error);
-          });
+          // console.log('[APP] 인증 상태 복원 후 대화 목록 가져오기');
+          if (!this._conversationsFetched) {
+            this._conversationsFetched = true;
+            this.$store.dispatch('fetchConversations').then(() => {
+              console.log('[APP] mounted에서 대화 목록 가져오기 완료');
+            }).catch(error => {
+              console.error('[APP] mounted에서 대화 목록 가져오기 실패:', error);
+            });
+          }
         }
         this.validateAuthToken();
       } catch (error) {
