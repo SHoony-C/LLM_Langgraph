@@ -7,6 +7,7 @@ from fastapi import Form
 class UserBase(BaseModel):
     username: str
     mail: EmailStr
+    deptname: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -37,6 +38,7 @@ class UserMap(BaseModel):
     username: Optional[str] = None  # name 필드로 매핑
     mail: Optional[str] = None  # email 필드로 매핑
     loginid: Optional[str] = None  # sub 필드로 매핑
+    deptname: Optional[str] = None  # department name 필드로 매핑
     picture: Optional[str] = None  # 프로필 이미지 URL
     
     # Google OAuth 추가 필드 - 사용하지 않지만 검증을 통과하기 위해 선언
@@ -89,6 +91,7 @@ class MessageBase(BaseModel):
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
     feedback: Optional[str] = None
 
 class MessageCreate(BaseModel):
@@ -100,6 +103,7 @@ class MessageCreate(BaseModel):
     user_name: Optional[str] = None
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
     skip_llm: Optional[bool] = False  # LLM 재호출 방지 플래그
 
 class Message(MessageBase):
@@ -134,6 +138,7 @@ class MessageRequest(BaseModel):
     q_mode: Optional[str] = None  # 질문 모드: search(검색) 또는 add(추가질문)
     keyword: Optional[str] = None  # 키워드 정보
     db_search_title: Optional[str] = None  # 랭체인에서 찾은 문서 타이틀
+    image: Optional[str] = None  # 이미지 URL
 
 class FeedbackRequest(BaseModel):
     feedback: Optional[str]
