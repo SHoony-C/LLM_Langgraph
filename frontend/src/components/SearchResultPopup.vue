@@ -72,24 +72,24 @@ export default {
       this.$emit('close');
     },
     getImageUrls(imageUrl) {
-      console.log('🖼️ 원본 이미지 URL 데이터:', imageUrl);
+      // console.log('🖼️ 원본 이미지 URL 데이터:', imageUrl);
       
       if (!imageUrl) return [];
       
       // 배열인 경우
       if (Array.isArray(imageUrl)) {
         const processedUrls = imageUrl.map(url => {
-          console.log('🔍 처리 중인 URL:', url);
+          // console.log('🔍 처리 중인 URL:', url);
           // "0:"/appdata/RC/images/daily_note_19_whole.jpg" 형식에서 실제 URL 추출
           if (typeof url === 'string' && url.includes(':')) {
             const extractedUrl = url.split(':').slice(1).join(':'); // 첫 번째 콜론 이후 부분
-            console.log('✅ 추출된 URL:', extractedUrl);
+            // console.log('✅ 추출된 URL:', extractedUrl);
             return extractedUrl;
           }
           return url;
         }).filter(url => url); // 빈 문자열 제거
         
-        console.log('🎯 최종 처리된 URL 배열:', processedUrls);
+        // console.log('🎯 최종 처리된 URL 배열:', processedUrls);
         return processedUrls;
       }
       
@@ -97,7 +97,7 @@ export default {
       if (typeof imageUrl === 'string') {
         if (imageUrl.includes(':')) {
           const extractedUrl = imageUrl.split(':').slice(1).join(':');
-          console.log('✅ 문자열에서 추출된 URL:', extractedUrl);
+          // console.log('✅ 문자열에서 추출된 URL:', extractedUrl);
           return extractedUrl ? [extractedUrl] : [];
         }
         return [imageUrl];
@@ -107,10 +107,10 @@ export default {
     },
     getFullImageUrl(url) {
       if (!url) return '';
-      console.log('🔗 변환 전 URL:', url);
+      // console.log('🔗 변환 전 URL:', url);
       // "/appdata/RC/images/" → "https://10.172.107.182/imageview/"
       const fullUrl = url.replace(/^\/appdata\/RC\/images\//, 'https://10.172.107.182/imageview/');
-      console.log('🔗 변환 후 URL:', fullUrl);
+      // console.log('🔗 변환 후 URL:', fullUrl);
       return fullUrl;
     },
     handleImageError(event) {
@@ -121,7 +121,7 @@ export default {
     handleImageLoad() {
       this.imageLoading = false;
       this.imageError = false;
-      console.log('이미지 로딩 성공');
+      // console.log('이미지 로딩 성공');
     }
   },
   watch: {

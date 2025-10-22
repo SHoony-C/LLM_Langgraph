@@ -2,7 +2,7 @@
   <div class="app" :class="{ 'dark-mode': true, 'collapsed-sidebar': isSidebarCollapsed }">
     <aside class="sidebar">
       <div class="sidebar-controls">
-        <div class="new-chat-btn" @click="$store.dispatch('createConversation')">
+        <div class="new-chat-btn" @click="newConversation">
           <svg class="btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
@@ -277,6 +277,18 @@ export default {
       this.isSidebarCollapsed = !this.isSidebarCollapsed;
       localStorage.setItem('sidebarCollapsed', this.isSidebarCollapsed);
     },
+    async newConversation() {
+      // 새 대화 생성 및 UI 초기화
+      try {
+        const newConversation = await this.$store.dispatch('createConversation');
+        if (newConversation) {
+          // Home 컴포넌트에 새 대화 신호 전송
+          this.$store.commit('setNewConversationTrigger', Date.now());
+        }
+      } catch (error) {
+        console.error('새 대화 생성 오류:', error);
+      }
+    },
     handleUserProfileClick(event) {
       // 단순히 사용자 팝업 토글만 수행 (인증 상태 확인 없음)
       if (event) {
@@ -287,7 +299,7 @@ export default {
     },
     async logout() {
       try {
-        // console.log('[APP] 로그아웃 시작');
+        // // console.log('[APP] 로그아웃 시작');
         
         // 사용자 팝업 닫기
         this.isUserPopupOpen = false;
@@ -303,7 +315,7 @@ export default {
                 'Content-Type': 'application/json'
               }
             });
-            console.log('[APP] 백엔드 로그아웃 API 호출 완료');
+            // console.log('[APP] 백엔드 로그아웃 API 호출 완료');
           } catch (apiError) {
             console.warn('[APP] 백엔드 로그아웃 API 호출 실패 (계속 진행):', apiError.message);
           }
@@ -311,7 +323,7 @@ export default {
         
         // Vuex store의 logout action 실행 (토큰 및 상태 정리)
         await this.$store.dispatch('logout');
-        console.log('[APP] 클라이언트 상태 정리 완료');
+        // console.log('[APP] 클라이언트 상태 정리 완료');
                 
         // OAuth 처리 플래그 초기화
         sessionStorage.removeItem('oauth_processing');
@@ -319,7 +331,7 @@ export default {
         sessionStorage.removeItem('logout_redirect');
         
         // 로그아웃 완료 후 즉시 SSO 로그인으로 리다이렉트
-        console.log('[APP] 로그아웃 완료 - SSO 로그인으로 리다이렉트');
+        // console.log('[APP] 로그아웃 완료 - SSO 로그인으로 리다이렉트');
         setTimeout(() => {
           try {
             window.location.replace('http://localhost:8000/api/auth/auth_sh');
@@ -381,7 +393,7 @@ export default {
         const jwtToken = localStorage.getItem('access_token');
         
         if (!jwtToken) {
-          console.log('[APP] JWT 토큰이 없음 - 로그아웃 처리');
+          // console.log('[APP] JWT 토큰이 없음 - 로그아웃 처리');
           this.$store.dispatch('logout');
           return;
         }
@@ -397,19 +409,19 @@ export default {
         });
         
         if (!response.ok) {
-          console.log('토큰 검증 실패:', response.status, response.statusText);
+          // console.log('토큰 검증 실패:', response.status, response.statusText);
           
           // 응답 본문 확인 (디버깅용)
           try {
-            const errorText = await response.text();
-            console.log('토큰 검증 실패 응답:', errorText);
+            await response.text();
+            // console.log('토큰 검증 실패 응답:', errorText);
           } catch (e) {
-            console.log('응답 본문 읽기 실패');
+            // console.log('응답 본문 읽기 실패');
           }
           
           if (response.status === 401) {
             // 토큰 만료 시 자동 SSO 로그인으로 리다이렉트
-            console.log('[APP] 토큰 만료 감지 - 자동 SSO 로그인으로 리다이렉트');
+            // console.log('[APP] 토큰 만료 감지 - 자동 SSO 로그인으로 리다이렉트');
             setTimeout(() => {
               try {
                 window.location.replace('http://localhost:8000/api/auth/auth_sh');
@@ -441,49 +453,48 @@ export default {
       }
     },
     async selectConversation(conversation) {
-      console.log('대화 선택됨:', {
-        conversationId: conversation.id,
-        conversationTitle: this.getConversationTitle(conversation),
-        messageCount: conversation.messages?.length || 0,
-        messages: conversation.messages?.map(m => ({
-          id: m.id,
-          role: m.role,
-          q_mode: m.q_mode,
-          question: m.question?.substring(0, 50) + '...',
-          hasAns: !!m.ans
-        })) || []
-      });
-      
-      // conversations를 새로고침하여 최신 데이터 가져오기
-      console.log('conversations 새로고침 시작...');
-      await this.$store.dispatch('fetchConversations');
-      console.log('conversations 새로고침 완료');
-      
-      // 새로고침된 대화 데이터에서 현재 선택한 대화 찾기
-      const refreshedConversation = this.$store.state.conversations.find(c => c.id === conversation.id);
-      if (refreshedConversation) {
-        console.log('새로고침된 대화 데이터:', {
-          id: refreshedConversation.id,
-          messageCount: refreshedConversation.messages?.length || 0,
-          firstMessage: refreshedConversation.messages?.[0] ? {
-            q_mode: refreshedConversation.messages[0].q_mode,
-            keyword: refreshedConversation.messages[0].keyword ? '있음' : '없음',
-            db_contents: refreshedConversation.messages[0].db_contents ? '있음' : '없음'
-          } : '없음'
+      try {
+        // 대화의 메시지를 별도로 가져오기
+        const response = await fetch(`http://localhost:8000/api/conversations/${conversation.id}/messages`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+            'Content-Type': 'application/json'
+          },
+          credentials: 'include'
         });
-      }
-      
-      // 대화를 store에 설정 (랭그래프 복원 트리거)
-      this.$store.commit('setCurrentConversation', refreshedConversation || conversation);
-      this.$store.commit('setShouldScrollToBottom', true);
+        
+        if (response.ok) {
+          const data = await response.json();
+          // 메시지가 포함된 대화 객체 생성
+          const conversationWithMessages = {
+            ...conversation,
+            messages: data.messages || []
+          };
+          
+          // 대화를 store에 설정 (랭그래프 복원 트리거)
+          this.$store.commit('setCurrentConversation', conversationWithMessages);
+          this.$store.commit('setShouldScrollToBottom', true);
 
-      // Home 컴포넌트에 기존 대화 선택 신호 전송 (실시간 기능 비활성화용)
-      this.$store.commit('setConversationRestored', true);
-      
-      console.log('setCurrentConversation 호출 완료, store 상태:', {
-        currentConversation: this.$store.state.currentConversation,
-        hasMessages: this.$store.state.currentConversation?.messages?.length > 0
-      });
+          // Home 컴포넌트에 기존 대화 선택 신호 전송 (실시간 기능 비활성화용)
+          this.$store.commit('setConversationRestored', true);
+          
+          // URL 파라미터는 사용하지 않음 (현재 상태 기반 복원)
+          
+          console.log('✅ 대화 선택 완료:', {
+            conversationId: conversation.id,
+            messageCount: data.messages?.length || 0
+          });
+        } else {
+          console.error('대화 메시지 가져오기 실패:', response.status);
+          // 실패 시 메시지 없는 대화로 설정
+          this.$store.commit('setCurrentConversation', conversation);
+        }
+      } catch (error) {
+        console.error('대화 선택 오류:', error);
+        // 오류 시 메시지 없는 대화로 설정
+        this.$store.commit('setCurrentConversation', conversation);
+      }
     },
     async saveLlamaApiSettings() {
       try {
@@ -512,17 +523,16 @@ export default {
       textarea.style.height = newHeight + 'px';
     },
     getConversationTitle(conversation) {
-      if (!conversation || !conversation.messages || conversation.messages.length === 0) {
+      if (!conversation) {
         return 'New Conversation';
       }
       
-      const firstUserMessage = conversation.messages.find(m => m.role === 'user');
-      if (firstUserMessage && firstUserMessage.question) {
-        const title = firstUserMessage.question.slice(0, 30);
-        return title.length < firstUserMessage.question.length ? `${title}...` : title;
+      // 백엔드에서 전달된 title 필드 사용
+      if (conversation.title && conversation.title !== 'New Conversation') {
+        return conversation.title;
       }
       
-      return `chat${conversation.id}`;
+      return 'New Conversation';
     },
     getConversationIcon(iconType) {
       const iconMap = {
@@ -654,7 +664,7 @@ export default {
       }
       
       if (token && user) {
-        console.log('사용자 정보 전체 : ', urlParams)
+        // console.log('사용자 정보 전체 : ', urlParams)
         // 추가 사용자 정보 가져오기
         const mail = urlParams.get('mail') || '';
         const loginid = urlParams.get('loginid') || '';
@@ -703,7 +713,7 @@ export default {
         // OAuth 처리 중 플래그 제거
         sessionStorage.removeItem('oauth_processing');
         
-        // console.log('[APP] handleSSOCallback - OAuth 처리 완료 플래그 설정됨');
+        // // console.log('[APP] handleSSOCallback - OAuth 처리 완료 플래그 설정됨');
         
         return true; // 토큰 처리 완료
       }
@@ -781,7 +791,7 @@ export default {
             sessionStorage.setItem('sso_processed', 'true');
             sessionStorage.removeItem('oauth_processing');
             
-            // console.log('[APP] processOAuthFromHash - OAuth 처리 완료 플래그 설정됨');
+            // // console.log('[APP] processOAuthFromHash - OAuth 처리 완료 플래그 설정됨');
             
             // 페이지 리로드 없이 인증 상태 업데이트
             this.$forceUpdate();
@@ -881,13 +891,13 @@ export default {
       const userInfoCookie = getCookie('user_info');
       const ssoProcessed = getCookie('sso_processed');
       
-      console.log('[APP] Checking cookies - access_token:', !!accessToken, 'user_info:', !!userInfoCookie, 'sso_processed:', ssoProcessed);
+      // console.log('[APP] Checking cookies - access_token:', !!accessToken, 'user_info:', !!userInfoCookie, 'sso_processed:', ssoProcessed);
       
       if (accessToken && userInfoCookie) {
         try {
           // URL 디코딩 후 JSON 파싱
           const decodedUserInfo = decodeURIComponent(userInfoCookie);
-          console.log('[APP] Decoded user_info:', decodedUserInfo);
+          // console.log('[APP] Decoded user_info:', decodedUserInfo);
           const userInfo = JSON.parse(decodedUserInfo);
           
           // localStorage에 저장
@@ -909,7 +919,7 @@ export default {
           // 대화 목록 가져오기
           this.$store.dispatch('fetchConversations');
           
-          console.log('[APP] 쿠키에서 인증 정보 복원 완료');
+          // console.log('[APP] 쿠키에서 인증 정보 복원 완료');
           
           // 쿠키 정리 (보안상 이유로)
           document.cookie = 'access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=localhost;';
@@ -929,13 +939,13 @@ export default {
   async created() {
     // OAuth 처리 중인 경우 중복 처리 방지
     if (sessionStorage.getItem('oauth_processing') === 'true') {
-      // console.log('[APP] OAuth 처리 중 - created 라이프사이클 중단');
+      // // console.log('[APP] OAuth 처리 중 - created 라이프사이클 중단');
       return; // 추가 처리 중단
     }
     
     // SSO 처리 완료된 경우 중복 처리 방지
     if (sessionStorage.getItem('sso_processed') === 'true') {
-      // console.log('[APP] SSO 처리 완료됨 - created 라이프사이클 중단');
+      // // console.log('[APP] SSO 처리 완료됨 - created 라이프사이클 중단');
       return;
     }
     
@@ -946,7 +956,7 @@ export default {
     const hasOAuthInQuery = currentUrlParams.get('code') || currentUrlParams.get('id_token') || currentUrlParams.get('error');
     
     if (hasOAuthInHash || hasOAuthInQuery) {
-      // console.log('[APP] OAuth 파라미터 발견 - OAuth 처리 우선 진행, created 라이프사이클 중단');
+      // // console.log('[APP] OAuth 파라미터 발견 - OAuth 처리 우선 진행, created 라이프사이클 중단');
       
       // OAuth 처리가 진행 중임을 표시
       sessionStorage.setItem('oauth_processing', 'true');
@@ -958,20 +968,20 @@ export default {
     // 먼저 쿠키에서 인증 정보 확인
     const hasAuthCookies = this.checkAuthCookies();
     if (hasAuthCookies) {
-      // console.log('[APP] 쿠키에서 인증 정보 복원됨');
+      // // console.log('[APP] 쿠키에서 인증 정보 복원됨');
       return;
     }
     
     // URL 해시에서 OAuth 파라미터 확인 (samsung OAuth 콜백)
     if (currentHash && currentHash.includes('id_token')) {
-      // console.log('[APP] URL 해시에서 OAuth 파라미터 발견 - 처리 시작');
+      // // console.log('[APP] URL 해시에서 OAuth 파라미터 발견 - 처리 시작');
       this.processOAuthFromHash(currentHash);
       return;
     }
     
     // URL 쿼리 파라미터에서 OAuth 콜백 확인
     if (hasOAuthInQuery) {
-      // console.log('[APP] URL 쿼리에서 OAuth 파라미터 발견 - 처리 시작');
+      // // console.log('[APP] URL 쿼리에서 OAuth 파라미터 발견 - 처리 시작');
       this.processOAuthFromQuery(currentUrlParams);
       return;
     }
@@ -981,7 +991,7 @@ export default {
     
     // SSO 콜백으로 토큰을 받은 경우 중복 인증 체크를 건너뜀
     if (hasToken) {
-      // console.log('[APP] SSO 콜백 처리됨 - 추가 처리 중단');
+      // // console.log('[APP] SSO 콜백 처리됨 - 추가 처리 중단');
       return;
     }
     
@@ -998,7 +1008,7 @@ export default {
           user: userData
         });
         
-        // console.log('[APP] localStorage에서 인증 상태 복원됨');
+        // // console.log('[APP] localStorage에서 인증 상태 복원됨');
         
         // 토큰 유효성 검사
         const response = await fetch('http://localhost:8000/api/auth/me', {
@@ -1006,7 +1016,7 @@ export default {
         });
         
         if (response.ok) {
-          // console.log('[APP] 토큰 유효성 검사 통과');
+          // // console.log('[APP] 토큰 유효성 검사 통과');
           // 인증된 사용자의 대화 목록 가져오기 (중복 호출 방지)
           if (!this._conversationsFetched) {
             this._conversationsFetched = true;
@@ -1014,8 +1024,8 @@ export default {
           }
           return;
         } else {
-          // console.log('[APP] 토큰 만료됨 - 자동 SSO 로그인으로 리다이렉트');
-          console.log('[APP] 토큰 만료 감지 - 자동 SSO 로그인으로 리다이렉트');
+          // // console.log('[APP] 토큰 만료됨 - 자동 SSO 로그인으로 리다이렉트');
+          // console.log('[APP] 토큰 만료 감지 - 자동 SSO 로그인으로 리다이렉트');
           setTimeout(() => {
             try {
               window.location.replace('http://localhost:8000/api/auth/auth_sh');
@@ -1033,7 +1043,7 @@ export default {
     // 로그아웃 플래그 정리
     const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
     if (isLogoutRedirect) {
-      // console.log('[APP] 로그아웃 직후 - 플래그 정리');
+      // // console.log('[APP] 로그아웃 직후 - 플래그 정리');
       sessionStorage.removeItem('logout_redirect');
       return; // 로그아웃 직후에는 자동 리다이렉트 방지
     }
@@ -1043,9 +1053,9 @@ export default {
     const hasProcessedOAuth = sessionStorage.getItem('sso_processed') === 'true';
     const isProcessingOAuth = sessionStorage.getItem('oauth_processing') === 'true';
     
-    console.log('[APP] Auth check - hasProcessedOAuth:', hasProcessedOAuth, 'isProcessingOAuth:', isProcessingOAuth);
-    console.log('[APP] Store authenticated:', this.$store.state.isAuthenticated);
-    console.log('[APP] LocalStorage tokens:', !!localStorage.getItem('access_token'), !!localStorage.getItem('user_info'));
+    // console.log('[APP] Auth check - hasProcessedOAuth:', hasProcessedOAuth, 'isProcessingOAuth:', isProcessingOAuth);
+    // console.log('[APP] Store authenticated:', this.$store.state.isAuthenticated);
+    // console.log('[APP] LocalStorage tokens:', !!localStorage.getItem('access_token'), !!localStorage.getItem('user_info'));
     
     if (!hasProcessedOAuth && !isProcessingOAuth) {
       // localStorage에 토큰이 있는지 먼저 확인
@@ -1053,7 +1063,7 @@ export default {
       
       // 인증되지 않은 상태에서만 samsung SSO로 리다이렉트
       if (!this.$store.state.isAuthenticated && !hasLocalAuth) {
-        console.log('[APP] 인증되지 않음 - SSO로 리다이렉트');
+        // console.log('[APP] 인증되지 않음 - SSO로 리다이렉트');
         setTimeout(() => {
           try {
             window.location.replace('http://localhost:8000/api/auth/auth_sh');
@@ -1067,24 +1077,24 @@ export default {
         }, 1000); // 1초 후 리다이렉트 (페이지 로딩 완료 대기)
       } else if (hasLocalAuth && !this.$store.state.isAuthenticated) {
         // localStorage에 토큰이 있지만 store에 없는 경우 store 업데이트
-        console.log('[APP] localStorage에서 인증 정보 복원 중...');
+        // console.log('[APP] localStorage에서 인증 정보 복원 중...');
         try {
           const userData = JSON.parse(localStorage.getItem('user_info'));
           this.$store.commit('setAuth', {
             token: localStorage.getItem('access_token'),
             user: userData
           });
-          console.log('[APP] Store 인증 상태 복원 완료');
+          // console.log('[APP] Store 인증 상태 복원 완료');
         } catch (error) {
           console.error('[APP] Store 복원 실패:', error);
         }
       }
     } else {
-      console.log('[APP] OAuth 처리 완료 또는 진행 중 - 자동 리다이렉트 건너뛰기');
+      // console.log('[APP] OAuth 처리 완료 또는 진행 중 - 자동 리다이렉트 건너뛰기');
     }
   },
   mounted() {
-    // console.log('현재 사용자 정보:', this.currentUser)
+    // // console.log('현재 사용자 정보:', this.currentUser)
     // 참조가 존재하는지 확인 후 접근
     if (this.$refs.inputField) {
       this.$refs.inputField.focus();
@@ -1118,11 +1128,11 @@ export default {
           });
           
           // 인증 상태 복원 후 대화 목록 가져오기
-          // console.log('[APP] 인증 상태 복원 후 대화 목록 가져오기');
+          // // console.log('[APP] 인증 상태 복원 후 대화 목록 가져오기');
           if (!this._conversationsFetched) {
             this._conversationsFetched = true;
             this.$store.dispatch('fetchConversations').then(() => {
-              console.log('[APP] mounted에서 대화 목록 가져오기 완료');
+              // console.log('[APP] mounted에서 대화 목록 가져오기 완료');
             }).catch(error => {
               console.error('[APP] mounted에서 대화 목록 가져오기 실패:', error);
             });

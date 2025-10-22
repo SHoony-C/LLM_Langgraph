@@ -87,13 +87,13 @@ export default {
 
     // 로그인 완료 후 처리
     processLoginSuccess() {
-      console.log('로그인 성공 처리');
+      // console.log('로그인 성공 처리');
     }
   },
   
   async mounted() {
     // 로그인 페이지 로딩 완료
-    console.log('로그인 페이지 마운트됨');
+    // console.log('로그인 페이지 마운트됨');
   },
   
   // 이미 로그인되어 있으면 관리자 페이지로 리다이렉트

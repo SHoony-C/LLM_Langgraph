@@ -1524,7 +1524,28 @@ async def stream_chat_with_llm(request: StreamRequest, http_request: Request, db
         print(f"[Chat Stream] - conversation_id가 None인가?: {request.conversation_id is None}")
         
         # 대화 히스토리 구성
-        messages = [{"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."}]
+        system_content = "당신은 도움이 되는 AI 어시스턴트입니다. 이전 대화의 맥락을 고려하여 답변해주세요."
+        
+        # 랭그래프 컨텍스트가 있는 경우 시스템 메시지에 추가
+        if request.include_langgraph_context and request.langgraph_context:
+            langgraph_context = request.langgraph_context
+            print(f"[Chat Stream] 랭그래프 컨텍스트 포함: {langgraph_context}")
+            
+            # 문서 정보를 시스템 메시지에 추가
+            if langgraph_context.get('documents'):
+                documents_info = f"\n\n참고할 수 있는 문서 정보:\n"
+                for i, doc in enumerate(langgraph_context['documents'][:5], 1):  # 최대 5개 문서만
+                    documents_info += f"{i}. {doc.get('title', '제목 없음')}\n"
+                    if doc.get('content'):
+                        # 내용이 너무 길면 잘라내기
+                        content = doc['content'][:500] + "..." if len(doc['content']) > 500 else doc['content']
+                        documents_info += f"   내용: {content}\n"
+                    documents_info += "\n"
+                
+                system_content += documents_info
+                system_content += "\n위 문서들을 참고하여 질문에 답변해주세요. 문서에 없는 정보는 추측하지 말고 '문서에서 해당 정보를 찾을 수 없습니다'라고 답변해주세요."
+        
+        messages = [{"role": "system", "content": system_content}]
         
         if request.conversation_id:
             try:
@@ -2106,8 +2127,8 @@ async def save_message_to_db(stream_request: StreamRequest, assistant_response: 
         # 대화의 last_updated 시간 업데이트
         conversation.last_updated = datetime.utcnow()
         
-        # 대화에 첫 번째 메시지인 경우 타이틀 설정
-        if not conversation.title or conversation.title == "New Conversation":
+        # 대화에 첫 번째 메시지인 경우 타이틀 설정 (추가 질문이 아닌 경우에만)
+        if (not conversation.title or conversation.title == "New Conversation") and stream_request.q_mode != "add":
             title = stream_request.question[:50]
             if len(stream_request.question) > 50:
                 title += "..."

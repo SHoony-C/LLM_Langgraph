@@ -26,10 +26,10 @@ def get_conversation_summary(conversation, db: Session):
             "icon_type": "general"
         }
     
-    # 첫 번째 사용자 메시지를 찾음
+    # 첫 번째 사용자 메시지를 찾음 (추가 질문 제외)
     first_user_message = None
     for message in conversation.messages:
-        if message.role == "user":
+        if message.role == "user" and message.q_mode != "add":
             first_user_message = message
             break
     
@@ -114,75 +114,22 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
         Conversation.is_deleted == False
     ).order_by(Conversation.created_at.desc()).all()
     
-    # 각 대화에 요약 정보 추가
+    # 각 대화에 요약 정보 추가 (conversations 테이블의 title 기반)
     result = []
     for conversation in conversations:
-        # 대화 정보를 사전으로 변환
+        # 대화 정보를 사전으로 변환 (conversations 테이블의 title 사용)
         conv_dict = {
             "id": conversation.id,
+            "title": conversation.title,  # conversations 테이블의 title 필드 사용
             "created_at": conversation.created_at,
             "last_updated": conversation.last_updated,
-            "messages": []
+            "messages": []  # 사이드바에서는 메시지 내용 불필요
         }
         
-        # 각 메시지를 user와 assistant로 분리하여 추가
-        for message in conversation.messages:
-            # 디버깅: 메시지 정보 출력
-            print(f"[CONVERSATION] 메시지 {message.id}: role={message.role}, q_mode={message.q_mode}, ans 길이={len(message.ans) if message.ans else 0}")
-            
-            # User 메시지 추가 (랭그래프 정보 포함)
-            user_message = {
-                "id": message.id,
-                "role": "user",
-                "text": message.question,
-                "question": message.question,
-                "feedback": message.feedback,
-                "created_at": message.created_at,
-                "user_name": message.user_name,
-                "q_mode": message.q_mode,  # 랭그래프 모드 추가
-                "keyword": message.keyword,  # 키워드 추가
-                "db_contents": message.db_contents,  # 검색 결과 전체 정보 추가
-                "image": message.image  # 이미지 URL 추가
-            }
-            conv_dict["messages"].append(user_message)
-            
-            # Assistant 메시지 추가 (답변이 있는 경우에만)
-            if message.ans:
-                print(f"[CONVERSATION] Assistant 메시지 추가: ID={message.id}, ans 길이={len(message.ans)}")
-                assistant_message = {
-                    "id": message.id,  # 실제 데이터베이스 메시지 ID 사용
-                    "role": "assistant", 
-                    "text": message.ans,
-                    "ans": message.ans,
-                    "question": message.question,
-                    "feedback": message.feedback,
-                    "created_at": message.created_at,
-                    "q_mode": message.q_mode,  # 랭그래프 모드 추가
-                    "keyword": message.keyword,  # 키워드 추가
-                    "db_contents": message.db_contents,  # 검색 결과 전체 정보 추가
-                    "image": message.image  # 이미지 URL 추가
-                }
-                conv_dict["messages"].append(assistant_message)
-            else:
-                print(f"[CONVERSATION] ⚠️ 메시지 {message.id}: ans가 비어있음")
+        print(f"[CONVERSATION] 대화 {conversation.id}: title='{conversation.title}', last_updated={conversation.last_updated}")
         
-        # LangGraph 정보 확인 (간소화된 로그)
-        has_langgraph = any(msg.get('keyword') or msg.get('db_contents') for msg in conv_dict['messages'])
-        if has_langgraph:
-            print(f"[CONVERSATION] 📊 대화 {conversation.id}: LangGraph 정보 포함")
-        
-        # 타이틀 및 아이콘 정보 추가
-        if conversation.title and conversation.title != "New Conversation":
-            # DB에 저장된 타이틀 사용
-            conv_dict["title"] = conversation.title
-        else:
-            # 동적으로 타이틀 생성
-            summary_info = get_conversation_summary(conversation, db)
-            conv_dict["title"] = summary_info["title"]
-        
-        # 아이콘 타입은 항상 동적으로 생성
+        # 아이콘 타입은 동적으로 생성 (LangGraph 여부 확인)
         summary_info = get_conversation_summary(conversation, db)
-        conv_dict["title"] = summary_info["title"]
         conv_dict["icon_type"] = summary_info["icon_type"]
         
         result.append(conv_dict)
@@ -294,8 +241,8 @@ async def create_message(
         from datetime import datetime
         conversation.last_updated = datetime.utcnow()
         
-        # 대화에 첫 번째 메시지인 경우 타이틀 설정
-        if not conversation.title or conversation.title == "New Conversation":
+        # 대화에 첫 번째 메시지인 경우 타이틀 설정 (추가 질문이 아닌 경우에만)
+        if (not conversation.title or conversation.title == "New Conversation") and message_request.q_mode != "add":
             title = message_request.question[:50]
             if len(message_request.question) > 50:
                 title += "..."
@@ -315,6 +262,138 @@ async def create_message(
         userMessage=message,
         assistantMessage=message
     )
+
+@router.get("/conversations/{conversation_id}/messages")
+def get_conversation_messages(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """대화의 모든 메시지 조회 (대화 내용 표시용)"""
+    try:
+        # 대화 존재 확인
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id
+        ).first()
+        
+        if not conversation:
+            raise HTTPException(status_code=404, detail="대화를 찾을 수 없습니다")
+        
+        # 모든 메시지 조회 (추가 질문 포함)
+        messages = db.query(Message).filter(
+            Message.conversation_id == conversation_id
+        ).order_by(Message.created_at.asc()).all()
+        
+        # 메시지를 user와 assistant로 분리하여 반환
+        result_messages = []
+        for message in messages:
+            # User 메시지 추가
+            user_message = {
+                "id": message.id,
+                "role": "user",
+                "text": message.question,
+                "question": message.question,
+                "feedback": message.feedback,
+                "created_at": message.created_at,
+                "user_name": message.user_name,
+                "q_mode": message.q_mode,
+                "keyword": message.keyword,
+                "db_contents": message.db_contents,
+                "image": message.image
+            }
+            result_messages.append(user_message)
+            
+            # Assistant 메시지 추가 (답변이 있는 경우에만)
+            if message.ans:
+                # langgraph_result 구성 (keyword와 db_contents 기반)
+                langgraph_result = None
+                if message.keyword or message.db_contents:
+                    try:
+                        import json
+                        langgraph_result = {
+                            "question": message.question,
+                            "answer": message.ans,
+                            "keyword": message.keyword,
+                            "documents": json.loads(message.db_contents) if message.db_contents else [],
+                            "documents_count": len(json.loads(message.db_contents)) if message.db_contents else 0,
+                            "sources": []  # 필요시 추가
+                        }
+                    except (json.JSONDecodeError, TypeError):
+                        langgraph_result = {
+                            "question": message.question,
+                            "answer": message.ans,
+                            "keyword": message.keyword,
+                            "documents": [],
+                            "documents_count": 0,
+                            "sources": []
+                        }
+                
+                assistant_message = {
+                    "id": message.id,
+                    "role": "assistant", 
+                    "text": message.ans,
+                    "ans": message.ans,
+                    "question": message.question,
+                    "feedback": message.feedback,
+                    "created_at": message.created_at,
+                    "q_mode": message.q_mode,
+                    "keyword": message.keyword,
+                    "db_contents": message.db_contents,
+                    "image": message.image,
+                    "langgraph_result": langgraph_result
+                }
+                result_messages.append(assistant_message)
+        
+        return {
+            "conversation_id": conversation_id,
+            "messages": result_messages
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[CONVERSATION_MESSAGES] 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"메시지 조회 오류: {str(e)}")
+
+@router.get("/conversations/{conversation_id}/messages/latest")
+def get_latest_messages(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """대화의 최신 메시지들 조회 (피드백용)"""
+    try:
+        # 대화 존재 확인
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id
+        ).first()
+        
+        if not conversation:
+            raise HTTPException(status_code=404, detail="대화를 찾을 수 없습니다")
+        
+        # 최신 사용자 메시지와 어시스턴트 메시지 조회
+        latest_user_message = db.query(Message).filter(
+            Message.conversation_id == conversation_id,
+            Message.role == "user"
+        ).order_by(Message.created_at.desc()).first()
+        
+        latest_assistant_message = db.query(Message).filter(
+            Message.conversation_id == conversation_id,
+            Message.role == "assistant"
+        ).order_by(Message.created_at.desc()).first()
+        
+        return {
+            "userMessage": latest_user_message,
+            "assistantMessage": latest_assistant_message
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[LATEST_MESSAGES] 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"메시지 조회 오류: {str(e)}")
 
 @router.get("/conversations/{conversation_id}/related")
 def find_related_conversations(
@@ -453,8 +532,8 @@ def save_stream_message(
     from datetime import datetime
     conversation.last_updated = datetime.utcnow()
     
-    # 대화에 첫 번째 메시지인 경우 타이틀 설정
-    if not conversation.title or conversation.title == "New Conversation":
+    # 대화에 첫 번째 메시지인 경우 타이틀 설정 (추가 질문이 아닌 경우에만)
+    if (not conversation.title or conversation.title == "New Conversation") and message_request.q_mode != "add":
         title = message_request.question[:50]
         if len(message_request.question) > 50:
             title += "..."
