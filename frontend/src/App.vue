@@ -21,7 +21,7 @@
         <transition-group name="list">
           <div 
             v-for="conversation in $store.state.conversations" 
-            :key="conversation.id" 
+            :key="conversation.id || `temp-${conversation.created_at}`" 
             class="conversation-item"
             :class="{ active: $store.state.currentConversation && conversation.id === $store.state.currentConversation.id }"
             @click="selectConversation(conversation)"
@@ -278,16 +278,8 @@ export default {
       localStorage.setItem('sidebarCollapsed', this.isSidebarCollapsed);
     },
     async newConversation() {
-      // 새 대화 생성 및 UI 초기화
-      try {
-        const newConversation = await this.$store.dispatch('createConversation');
-        if (newConversation) {
-          // Home 컴포넌트에 새 대화 신호 전송
-          this.$store.commit('setNewConversationTrigger', Date.now());
-        }
-      } catch (error) {
-        console.error('새 대화 생성 오류:', error);
-      }
+      // Home 컴포넌트에 새 대화 신호 전송 (실제 생성은 Home.vue에서 처리)
+      this.$store.commit('setNewConversationTrigger', Date.now());
     },
     handleUserProfileClick(event) {
       // 단순히 사용자 팝업 토글만 수행 (인증 상태 확인 없음)

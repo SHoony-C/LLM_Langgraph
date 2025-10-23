@@ -590,8 +590,6 @@ def _upsert_user_from_id_token(db_session: Session, decoded_token: dict) -> User
             lookup_filters.append(User.mail == mail)
         if username:
             lookup_filters.append(User.username == username)
-        if deptname:
-            lookup_filters.append(User.deptname == deptname)
         if lookup_filters:
             if len(lookup_filters) == 1:
                 db_user = db_session.query(User).filter(lookup_filters[0]).first()

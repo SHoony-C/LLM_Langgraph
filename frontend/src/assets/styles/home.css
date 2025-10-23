@@ -970,7 +970,7 @@
 
 
 /* 랭그래프 스타일 */
-.rangraph-container {
+.langgraph-container {
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(20px);
   border-radius: 20px;
@@ -984,21 +984,21 @@
   transition: all 0.3s ease;
 }
 
-.rangraph-container::-webkit-scrollbar {
+.langgraph-container::-webkit-scrollbar {
   width: 8px;
 }
 
-.rangraph-container::-webkit-scrollbar-track {
+.langgraph-container::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
 }
 
-.rangraph-container::-webkit-scrollbar-thumb {
+.langgraph-container::-webkit-scrollbar-thumb {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 4px;
 }
 
-.rangraph-container::-webkit-scrollbar-thumb:hover {
+.langgraph-container::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(135deg, #5a67d8 0%, #667eea 100%);
 }
 
@@ -1013,7 +1013,7 @@
   }
 }
 
-.rangraph-header {
+.langgraph-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1022,7 +1022,7 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.rangraph-header h2 {
+.langgraph-header h2 {
   margin: 0;
   font-size: 1.4rem;
   font-weight: 600;
@@ -1034,7 +1034,7 @@
 
 
 
-.rangraph-step {
+.langgraph-step {
   margin-bottom: 24px;
   padding: 20px;
   background: rgba(255, 255, 255, 0.03);
@@ -1049,7 +1049,7 @@
   height: 100% !important;
 }
 
-.rangraph-step.active {
+.langgraph-step.active {
   opacity: 1;
   transform: translateY(0);
   border-color: rgba(102, 126, 234, 0.3);
@@ -1102,7 +1102,7 @@
   transition: all 0.3s ease;
 }
 
-.rangraph-step.active .step-status {
+.langgraph-step.active .step-status {
   opacity: 1;
 }
 
@@ -1668,7 +1668,7 @@
   }
   
   /* 랭그래프 히스토리 스타일 */
-  .rangraph-history {
+  .langgraph-history {
     margin-top: 24px;
     padding-top: 20px;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -1780,7 +1780,7 @@
     color: var(--text-color);
   }
   
-  .rangraph-progress {
+  .langgraph-progress {
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -1870,12 +1870,12 @@
 
 /* 모바일 반응형 */
 @media (max-width: 1468px) {
-  .rangraph-container {
+  .langgraph-container {
     margin: 16px;
     padding: 20px;
   }
   
-  .rangraph-step {
+  .langgraph-step {
     padding: 16px;
   }
   

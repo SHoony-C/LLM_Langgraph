@@ -3,11 +3,6 @@ const { defineConfig } = require('@vue/cli-service')
 module.exports = defineConfig({
   transpileDependencies: true,
   configureWebpack: {
-    resolve: {
-      alias: {
-        vue: '@vue/runtime-dom'
-      }
-    },
     plugins: [
       new (require('webpack')).DefinePlugin({
         __VUE_OPTIONS_API__: JSON.stringify(true),

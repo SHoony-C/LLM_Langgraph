@@ -413,10 +413,6 @@ const store = createStore({
         state.conversations = [];
       }
       state.conversations.unshift(conversation);
-      state.currentConversation = conversation;
-      
-      // 새 대화 선택 시 랭그래프 관련 상태 초기화를 위한 트리거
-      state._newConversationTrigger = Date.now();
     },
     setNewConversationTrigger(state) {
       state._newConversationTrigger = Date.now();
@@ -457,6 +453,13 @@ const store = createStore({
       
       // 항상 대화를 설정 (동일한 대화도 다시 설정하여 랭그래프 복원 트리거)
       state.currentConversation = conversation;
+      
+      // sessionStorage에 현재 대화 ID 저장 (새로고침 시 복원용)
+      if (conversation && conversation.id) {
+        sessionStorage.setItem('currentConversationId', conversation.id.toString());
+      } else {
+        sessionStorage.removeItem('currentConversationId');
+      }
       
       // 강제 반응성 트리거
       state._conversationUpdateTrigger = Date.now();
@@ -789,8 +792,17 @@ const store = createStore({
           });
         });
         
-        // 현재 선택된 대화 ID 저장
-        const currentConversationId = state.currentConversation ? state.currentConversation.id : null;
+        // 현재 선택된 대화 ID 저장 (store 또는 sessionStorage에서)
+        let currentConversationId = state.currentConversation ? state.currentConversation.id : null;
+        
+        // 새로고침 시 sessionStorage에서 대화 ID 복원
+        if (!currentConversationId) {
+          const savedConversationId = sessionStorage.getItem('currentConversationId');
+          if (savedConversationId) {
+            currentConversationId = parseInt(savedConversationId, 10);
+            console.log('🔄 새로고침 - sessionStorage에서 대화 ID 복원:', currentConversationId);
+          }
+        }
         
         commit('setConversations', data);
         
@@ -798,24 +810,22 @@ const store = createStore({
         if (state.loginNewConversation) {
           // 로그인 후에는 대화를 자동으로 선택하지 않음
           commit('setCurrentConversation', null);
-        } else {
-          // 로그인 후 새 대화 플래그가 설정된 경우 자동 선택 방지
-        if (state.loginNewConversation) {
-          // 로그인 후에는 대화를 자동으로 선택하지 않음
-          commit('setCurrentConversation', null);
+          sessionStorage.removeItem('currentConversationId'); // 세션 스토리지 정리
         } else {
           // 현재 대화가 없거나 기존 선택한 대화가 있으면 해당 대화 유지
           if (currentConversationId && data.length > 0) {
             const existingConversation = data.find(c => c.id === currentConversationId);
             if (existingConversation) {
               commit('setCurrentConversation', existingConversation);
+              console.log('✅ 기존 대화 복원 완료:', currentConversationId);
             } else {
               // 선택한 대화가 삭제된 경우 첫 번째 대화 선택
               commit('setCurrentConversation', data[0]);
+              sessionStorage.setItem('currentConversationId', data[0].id);
             }
           } else if (!state.currentConversation && data.length > 0) {
-              commit('setCurrentConversation', data[0]);
-            }
+            commit('setCurrentConversation', data[0]);
+            sessionStorage.setItem('currentConversationId', data[0].id);
           }
         }
       } catch (error) {

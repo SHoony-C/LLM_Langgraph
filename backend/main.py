@@ -2,7 +2,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from app.routes import conversations, llm, auth
+from app.routes import conversations, normal_llm, langgraph, auth
 from app.database import Base, engine
 from fastapi.staticfiles import StaticFiles
 
@@ -75,7 +75,8 @@ async def options_handler(request: Request, full_path: str):
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(conversations.router, prefix="/api", tags=["conversations"])
 # messages router 제거됨 - conversations에서 처리
-app.include_router(llm.router, prefix="/api/llm", tags=["llm"])
+app.include_router(normal_llm.router, prefix="/api/normal_llm", tags=["normal_llm"])
+app.include_router(langgraph.router, prefix="/api/langgraph", tags=["langgraph"])
 
 
 @app.get("/")
