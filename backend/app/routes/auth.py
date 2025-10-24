@@ -338,15 +338,15 @@ def _resolve_current_user_from_request(request: Request, db: Session) -> User:
             user = None
             if loginid:
                 user = db.query(User).filter(User.loginid == loginid).first()
-                print(f"[AUTH] loginid로 사용자 검색 결과: {user is not None}")
+                # print(f"[AUTH] loginid로 사용자 검색 결과: {user is not None}")
             if not user and username:
                 user = db.query(User).filter(User.username == username).first()
-                print(f"[AUTH] username으로 사용자 검색 결과: {user is not None}")
+                # print(f"[AUTH] username으로 사용자 검색 결과: {user is not None}")
             if not user and deptname:
                 user = db.query(User).filter(User.deptname == deptname).first()
-                print(f"[AUTH] deptname으로 사용자 검색 결과: {user is not None}")
+                # print(f"[AUTH] deptname으로 사용자 검색 결과: {user is not None}")
             if user:
-                print(f"[AUTH] 세션 쿠키로 사용자 인증 성공: {user.username}")
+                # print(f"[AUTH] 세션 쿠키로 사용자 인증 성공: {user.username}")
                 return user
         except JWTError as e:
             print(f"[AUTH] 세션 쿠키 JWT 디코딩 실패: {str(e)}")
@@ -358,16 +358,16 @@ def _resolve_current_user_from_request(request: Request, db: Session) -> User:
     # 2) Bearer
     bearer = _extract_bearer_token(request.headers)
     if bearer:
-        print(f"[AUTH] Bearer 토큰 발견")
+        # print(f"[AUTH] Bearer 토큰 발견")
         try:
             # 서명검증없이 sub만 뽑아 DB 조회(기존 access_token 호환 목적)
             payload = jwt.get_unverified_claims(bearer)
             sub = payload.get("sub")
-            print(f"[AUTH] Bearer 토큰 sub: {sub}")
+            # print(f"[AUTH] Bearer 토큰 sub: {sub}")
             if sub:
                 user = db.query(User).filter(User.username == sub).first()
                 if user:
-                    print(f"[AUTH] Bearer 토큰으로 사용자 인증 성공: {user.username}")
+                    # print(f"[AUTH] Bearer 토큰으로 사용자 인증 성공: {user.username}")
                     return user
                 else:
                     print(f"[AUTH] Bearer 토큰 sub에 해당하는 사용자 없음: {sub}")

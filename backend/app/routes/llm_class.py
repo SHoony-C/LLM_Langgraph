@@ -115,10 +115,12 @@ class DirectSimilarityCalculator:
 class StreamRequest(BaseModel):
     question: str
     conversation_id: Optional[int] = None
+    message_id: Optional[int] = None  # 영구 메시지 ID 추가
     generate_image: Optional[bool] = False  # 이미지 생성 플래그 추가
     # LangGraph 컨텍스트 필드 추가
     langgraph_context: Optional[dict] = None
     include_langgraph_context: Optional[bool] = False
+    q_mode: Optional[str] = None  # 질문 모드 추가 (add, search 등)
 
 # LangGraph 상태 정의
 class SearchState(dict):

@@ -103,5 +103,5 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
         print(f"User not found in database: {username}")
         raise credentials_exception
     
-    print(f"User authenticated successfully: {username}")
+    # print(f"User authenticated successfully: {username}")
     return user 

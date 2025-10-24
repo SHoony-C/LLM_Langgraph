@@ -19,19 +19,6 @@ export async function executeLanggraphFlow(inputText, context) {
 
   console.log('🔄 LangGraph 4단계 분석 시작:', inputText);
 
-  // 사용자 질문 메시지를 먼저 화면에 표시
-  if (context.$store.state.currentConversation) {
-    const userMessage = {
-      id: Date.now() + Math.random() * 1000,
-      conversation_id: context.$store.state.currentConversation.id,
-      role: 'user',
-      question: inputText,
-      ans: null,
-      created_at: new Date().toISOString()
-    };
-    context.$store.commit('addMessageToCurrentConversation', userMessage);
-  }
-
   // 실행 상태 설정
   context.messages.isLoading.value = true;
   context.langgraph.isSearching.value = false;
@@ -50,8 +37,26 @@ export async function executeLanggraphFlow(inputText, context) {
   context.langgraph.analysisImageUrl.value = '';
 
   try {
-    // SSE 스트리밍으로 LangGraph 실행
-    await executeLangGraphWithSSE(inputText, context);
+    // 1단계: prepare_message API 호출하여 영구 message_id 발급
+    const permanentMessageId = await prepareMessageForLangGraph(inputText, context);
+    console.log('✅ 영구 메시지 ID 발급 완료:', permanentMessageId);
+
+    // 2단계: 사용자 질문 메시지를 화면에 표시 (영구 ID 사용)
+    if (context.$store.state.currentConversation) {
+      const userMessage = {
+        id: Date.now() + Math.random() * 1000,
+        conversation_id: context.$store.state.currentConversation.id,
+        role: 'user',
+        question: inputText,
+        ans: null,
+        backend_id: permanentMessageId, // 영구 ID 설정
+        created_at: new Date().toISOString()
+      };
+      context.$store.commit('addMessageToCurrentConversation', userMessage);
+    }
+
+    // 3단계: SSE 스트리밍으로 LangGraph 실행
+    await executeLangGraphWithSSE(inputText, context, permanentMessageId);
   } catch (error) {
     console.error('❌ LangGraph 실행 오류:', error);
     await fallbackLanggraphFlow(inputText, error, context);
@@ -59,11 +64,68 @@ export async function executeLanggraphFlow(inputText, context) {
 }
 
 /**
+ * LangGraph 실행을 위한 영구 메시지 ID 발급
+ * @param {string} inputText - 사용자 입력 텍스트
+ * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
+ * @returns {number} 영구 메시지 ID
+ */
+async function prepareMessageForLangGraph(inputText, context) {
+  try {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('인증 토큰이 없습니다.');
+    }
+
+    const conversationId = context.$store.state.currentConversation?.id;
+    if (!conversationId) {
+      throw new Error('현재 대화가 없습니다.');
+    }
+
+    const requestData = {
+      question: inputText,
+      q_mode: 'search', // LangGraph는 search 모드
+      keyword: null,
+      db_contents: null,
+      image: null
+    };
+
+    console.log('📋 prepare_message API 호출:', requestData);
+
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(requestData)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`prepare_message API 호출 실패: ${response.status} ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ prepare_message 응답:', result);
+
+    if (result.userMessage && result.userMessage.id) {
+      return result.userMessage.id;
+    } else {
+      throw new Error('영구 메시지 ID를 받지 못했습니다.');
+    }
+  } catch (error) {
+    console.error('❌ prepare_message API 호출 오류:', error);
+    throw error;
+  }
+}
+
+/**
  * SSE 스트리밍으로 LangGraph 실행
  * @param {string} inputText - 사용자 입력 텍스트
  * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
+ * @param {number} permanentMessageId - 영구 메시지 ID
  */
-export async function executeLangGraphWithSSE(inputText, context) {
+export async function executeLangGraphWithSSE(inputText, context, permanentMessageId) {
   // AbortController 생성 및 전역 저장
   const controller = new AbortController();
   window.sseController = controller;
@@ -79,6 +141,7 @@ export async function executeLangGraphWithSSE(inputText, context) {
     const requestData = {
       question: inputText,
       conversation_id: context.$store.state.currentConversation?.id || null,
+      message_id: permanentMessageId, // 영구 메시지 ID 포함
       generate_image: false,
       include_langgraph_context: false,
       langgraph_context: null
@@ -289,7 +352,7 @@ export async function processDirectLangGraphResult(apiResult, context) {
 
     // LangGraph 결과를 백엔드에 저장
     try {
-      await context.saveLangGraphMessage({
+      const saveResult = await context.saveLangGraphMessage({
         result: {
           response: {
             answer: context.langgraph.finalAnswer.value
@@ -298,7 +361,19 @@ export async function processDirectLangGraphResult(apiResult, context) {
           candidates_total: context.langgraph.extractedDbSearchTitle.value ? context.langgraph.extractedDbSearchTitle.value.map(title => ({ res_payload: { document_name: title } })) : []
         }
       });
-      console.log('✅ LangGraph 메시지 저장 완료');
+      console.log('✅ LangGraph 메시지 저장 완료:', saveResult);
+      
+      // 백엔드에서 생성된 메시지 ID를 프론트엔드 메시지에 설정
+      if (saveResult && saveResult.userMessage && saveResult.userMessage.id) {
+        const currentConversation = context.$store.state.currentConversation;
+        if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
+          const lastMessage = currentConversation.messages[currentConversation.messages.length - 1];
+          if (lastMessage.role === 'assistant' && !lastMessage.backend_id) {
+            lastMessage.backend_id = saveResult.userMessage.id;
+            console.log('✅ LangGraph 메시지에 backend_id 설정:', saveResult.userMessage.id);
+          }
+        }
+      }
     } catch (error) {
       console.error('❌ LangGraph 메시지 저장 실패:', error);
     }
@@ -363,6 +438,10 @@ async function saveLangGraphMessage(result, context) {
     // 검색 결과를 db_contents로 변환
     const dbContentsData = context.langgraph.searchResults.value || [];
     
+    console.log('🖼️ [FRONTEND IMAGE 전송] analysisImageUrl 값:', context.langgraph.analysisImageUrl.value);
+    console.log('🖼️ [FRONTEND IMAGE 전송] analysisImageUrl 타입:', typeof context.langgraph.analysisImageUrl.value);
+    console.log('🖼️ [FRONTEND IMAGE 전송] analysisImageUrl 길이:', context.langgraph.analysisImageUrl.value?.length);
+    
     console.log('📤 [SAVE] 전송 데이터:', {
       question: question,
       q_mode: 'search',
@@ -374,24 +453,31 @@ async function saveLangGraphMessage(result, context) {
     });
     
     // 메시지 생성 API 호출
+    const requestBody = { 
+      question: question,
+      q_mode: 'search',  // 첫 번째 질문은 q_mode를 'search'로 설정 (대화 제목 업데이트를 위해)
+      assistant_response: answer,
+      skip_llm: true,  // 첫 번째 질문은 LangGraph 답변만 사용, 별도 LLM 처리 안함
+      keyword: JSON.stringify(langGraphState), // 전체 상태를 JSON으로 저장
+      db_search_title: Array.isArray(dbSearchTitleData) ? JSON.stringify(dbSearchTitleData) : dbSearchTitleData,
+      db_contents: JSON.stringify(dbContentsData), // 검색 결과 전체 정보 저장
+      image: context.langgraph.analysisImageUrl.value,  // 이미지 URL 전송
+      user_name: context.$store.state.user?.username || '사용자'
+    };
+    
+    console.log('🖼️ [FRONTEND IMAGE 전송] 최종 requestBody.image 값:', requestBody.image);
+    console.log('📤 [FRONTEND IMAGE 전송] 요청 본문 전체:', JSON.stringify(requestBody, null, 2));
+    
     const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('access_token')}`
       },
-      body: JSON.stringify({ 
-        question: question,
-        q_mode: 'search',  // 첫 번째 질문은 q_mode를 'search'로 설정 (대화 제목 업데이트를 위해)
-        assistant_response: answer,
-        skip_llm: true,  // 첫 번째 질문은 LangGraph 답변만 사용, 별도 LLM 처리 안함
-        keyword: JSON.stringify(langGraphState), // 전체 상태를 JSON으로 저장
-        db_search_title: Array.isArray(dbSearchTitleData) ? JSON.stringify(dbSearchTitleData) : dbSearchTitleData,
-        db_contents: JSON.stringify(dbContentsData), // 검색 결과 전체 정보 저장
-        image: context.langgraph.analysisImageUrl.value,  // 이미지 URL 전송
-        user_name: context.$store.state.user?.username || '사용자'
-      })
+      body: JSON.stringify(requestBody)
     });
+    
+    console.log('📥 [FRONTEND IMAGE 전송] 응답 상태:', response.status, response.statusText);
     
     if (response.ok) {
       await response.json();

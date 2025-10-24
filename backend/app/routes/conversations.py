@@ -115,7 +115,7 @@ def get_conversations(db: Session = Depends(get_db), current_user: User = Depend
             "messages": []  # 사이드바에서는 메시지 내용 불필요
         }
         
-        print(f"[CONVERSATION] 대화 {conversation.id}: title='{conversation.title}', last_updated={conversation.last_updated}")
+        # print(f"[CONVERSATION] 대화 {conversation.id}: title='{conversation.title}', last_updated={conversation.last_updated}")
         
         # 아이콘 타입은 동적으로 생성 (LangGraph 여부 확인)
         summary_info = get_conversation_summary(conversation, db)
@@ -212,7 +212,14 @@ async def create_message(
         )
     
     # 메시지 생성 및 저장
-    print(f"[MESSAGE] 💾 메시지 저장 - conversation_id: {conversation_id}, q_mode: {message_request.q_mode}")
+    # print(f"[MESSAGE] 💾 메시지 저장 - conversation_id: {conversation_id}, q_mode: {message_request.q_mode}")
+    # print(f"[MESSAGE] 🖼️ [IMAGE 저장] image 데이터: {message_request.image}")
+    # print(f"[MESSAGE] 📋 [IMAGE 저장] 요청 데이터 타입: image={type(message_request.image).__name__}")
+    
+    # if message_request.image:
+    #     print(f"[MESSAGE] ✅ [IMAGE 저장] image 데이터 있음: {message_request.image[:100] if len(message_request.image) > 100 else message_request.image}")
+    # else:
+    #     print(f"[MESSAGE] ⚠️ [IMAGE 저장] image 데이터 없음 (None 또는 빈 문자열)")
     
     message = Message(
         conversation_id=conversation_id,
@@ -225,6 +232,8 @@ async def create_message(
         db_contents=message_request.db_contents,
         image=message_request.image
     )
+    
+    # print(f"[MESSAGE] 🖼️ [IMAGE 저장] Message 객체 생성 완료 - image 값: {message.image}")
     
     try:
         db.add(message)
@@ -252,6 +261,18 @@ async def create_message(
         db.refresh(message)
         db.refresh(conversation)
         print(f"[MESSAGE] ✅ 메시지 저장 및 대화 업데이트 완료. ID: {message.id}")
+        # print(f"[MESSAGE] 🖼️ [IMAGE 저장] DB 커밋 후 image 값: {message.image}")
+        
+        # DB에 실제로 저장된 값 확인
+        # saved_message = db.query(Message).filter(Message.id == message.id).first()
+        # if saved_message:
+        #     print(f"[MESSAGE] 🖼️ [IMAGE 저장] DB 조회 후 image 값: {saved_message.image}")
+        #     if saved_message.image:
+        #         print(f"[MESSAGE] ✅ [IMAGE 저장 성공] image 데이터가 DB에 정상 저장됨")
+        #     else:
+        #         print(f"[MESSAGE] ⚠️ [IMAGE 저장 실패] image 데이터가 DB에 저장되지 않음")
+        # else:
+        #     print(f"[MESSAGE] ❌ [IMAGE 저장] DB 조회 실패 - 메시지를 찾을 수 없음")
     except Exception as e:
         print(f"[MESSAGE] ❌ 저장 오류: {str(e)}")
         db.rollback()
@@ -289,7 +310,7 @@ def get_conversation_messages(
         for message in messages:
             # User 메시지 추가
             user_message = {
-                "id": message.id,
+                "id": f"{message.id}-user",
                 "role": "user",
                 "text": message.question,
                 "question": message.question,
@@ -299,7 +320,8 @@ def get_conversation_messages(
                 "q_mode": message.q_mode,
                 "keyword": message.keyword,
                 "db_contents": message.db_contents,
-                "image": message.image
+                "image": message.image,
+                "backend_id": message.id  # 원본 백엔드 ID 보존
             }
             result_messages.append(user_message)
             
@@ -329,7 +351,7 @@ def get_conversation_messages(
                         }
                 
                 assistant_message = {
-                    "id": message.id,
+                    "id": f"{message.id}-assistant",
                     "role": "assistant", 
                     "text": message.ans,
                     "ans": message.ans,
@@ -340,7 +362,8 @@ def get_conversation_messages(
                     "keyword": message.keyword,
                     "db_contents": message.db_contents,
                     "image": message.image,
-                    "langgraph_result": langgraph_result
+                    "langgraph_result": langgraph_result,
+                    "backend_id": message.id  # 원본 백엔드 ID 보존
                 }
                 result_messages.append(assistant_message)
         
@@ -454,7 +477,7 @@ def find_related_conversations(
                 for msg in conversation.messages:
                     # User 메시지
                     user_message = {
-                        "id": msg.id,
+                        "id": f"{msg.id}-user",
                         "role": "user",
                         "text": msg.question,
                         "question": msg.question,
@@ -464,14 +487,15 @@ def find_related_conversations(
                         "q_mode": msg.q_mode,
                         "keyword": msg.keyword,
                         "db_contents": msg.db_contents,
-                        "image": msg.image
+                        "image": msg.image,
+                        "backend_id": msg.id  # 원본 백엔드 ID 보존
                     }
                     conv_dict["messages"].append(user_message)
                     
                     # Assistant 메시지 (답변이 있는 경우)
                     if msg.ans:
                         assistant_message = {
-                            "id": msg.id,
+                            "id": f"{msg.id}-assistant",
                             "role": "assistant",
                             "text": msg.ans,
                             "ans": msg.ans,
@@ -481,7 +505,8 @@ def find_related_conversations(
                             "q_mode": msg.q_mode,
                             "keyword": msg.keyword,
                             "db_contents": msg.db_contents,
-                            "image": msg.image
+                            "image": msg.image,
+                            "backend_id": msg.id  # 원본 백엔드 ID 보존
                         }
                         conv_dict["messages"].append(assistant_message)
                 
@@ -491,6 +516,96 @@ def find_related_conversations(
                 }
     
     return {"related_conversation": None, "message": "No related conversation with LangGraph info found"}
+
+@router.post("/conversations/{conversation_id}/messages/prepare")
+def prepare_message(
+    conversation_id: int,
+    message_request: MessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    질문 전송 시 즉시 영구 message_id 발급 (상태: generating)
+    
+    중요: 이 시스템에서는 질문과 답변이 하나의 Message row에 저장됩니다.
+    - question 필드: 사용자 질문
+    - ans 필드: AI 답변
+    - role: 'user' (질문과 답변이 모두 user 메시지에 포함)
+    - 별도의 assistant 메시지는 생성하지 않음
+    """
+    # 대화가 존재하고 현재 사용자에게 속하는지 확인
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+        Conversation.is_deleted == False
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # user_name 검증 및 설정
+    user_name = current_user.loginid or current_user.username
+    if not user_name:
+        print(f"[ERROR] prepare user_name이 없음. current_user: {current_user}")
+        raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")
+    
+    print(f"[PREPARE] 사용자명 설정: {user_name}")
+    print(f"[PREPARE] 🔍 추가질문 메시지 준비 시작:")
+    print(f"[PREPARE]   - conversation_id: {conversation_id}")
+    print(f"[PREPARE]   - question: {message_request.question[:50]}...")
+    print(f"[PREPARE]   - q_mode: {message_request.q_mode}")
+    print(f"[PREPARE]   - user_name: {user_name}")
+    
+    # 사용자 메시지 생성 (상태: generating, 내용은 비어있음)
+    # 중요: 질문과 답변이 하나의 row에 저장되는 구조
+    # - question: 사용자 질문 (즉시 저장)
+    # - ans: AI 답변 (스트리밍 완료 후 업데이트)
+    user_message = Message(
+        conversation_id=conversation_id,
+        role="user",
+        question=message_request.question,  # 사용자 질문
+        ans="",  # AI 답변 (아직 없음, 스트리밍 완료 후 업데이트됨)
+        user_name=user_name,
+        q_mode=message_request.q_mode,
+        keyword=message_request.keyword,
+        db_contents=message_request.db_contents,
+        image=message_request.image
+    )
+    
+    # 중요: assistant 메시지는 DB에 저장하지 않음
+    # 질문과 답변이 하나의 row에 저장되는 구조이므로
+    # assistant 메시지는 UI 표시용으로만 사용하고 DB에는 저장하지 않음
+    # (중복 저장 방지)
+    
+    # 대화의 last_updated 시간 업데이트
+    from datetime import datetime
+    conversation.last_updated = datetime.utcnow()
+    
+    # 대화에 첫 번째 메시지인 경우 타이틀 설정 (추가 질문이 아닌 경우에만)
+    if (not conversation.title or conversation.title == "New Conversation") and message_request.q_mode != "add":
+        title = message_request.question[:50]
+        if len(message_request.question) > 50:
+            title += "..."
+        conversation.title = title
+        print(f"[PREPARE] 📝 대화 타이틀 설정: {title}")
+    
+    db.add(user_message)
+    # assistant_message는 DB에 저장하지 않음 (중복 저장 방지)
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(conversation)
+    
+    print(f"[PREPARE] ✅ 영구 메시지 ID 발급 완료: user={user_message.id}")
+    print(f"[PREPARE] 📊 메시지 저장 완료:")
+    print(f"[PREPARE]   - user_message.id: {user_message.id}")
+    print(f"[PREPARE]   - conversation_id: {conversation_id}")
+    print(f"[PREPARE]   - q_mode: {message_request.q_mode}")
+    print(f"[PREPARE]   - assistant_message는 DB에 저장하지 않음 (중복 저장 방지)")
+    
+    return MessageResponse(
+        userMessage=user_message,
+        assistantMessage=user_message  # assistant 메시지는 user 메시지와 동일 (UI 표시용)
+    )
 
 @router.post("/conversations/{conversation_id}/messages/stream")
 def save_stream_message(
@@ -548,6 +663,45 @@ def save_stream_message(
         userMessage=message,
         assistantMessage=message
     )
+
+@router.put("/messages/{message_id}/complete")
+def complete_message(
+    message_id: int,
+    completion_data: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """스트리밍 완료 시 메시지 내용 업데이트"""
+    # 메시지가 존재하고 현재 사용자의 대화에 속하는지 확인
+    message = db.query(Message).join(Conversation).filter(
+        Message.id == message_id,
+        Conversation.user_id == current_user.id
+    ).first()
+    
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # 메시지 내용 업데이트
+    if 'assistant_response' in completion_data:
+        message.ans = completion_data['assistant_response']
+    
+    if 'image_url' in completion_data:
+        message.image = completion_data['image_url']
+    
+    try:
+        db.commit()
+        db.refresh(message)
+        print(f"[COMPLETE] ✅ 메시지 {message_id} 완료 처리: {len(message.ans or '')}자")
+    except Exception as e:
+        print(f"[COMPLETE] ❌ 메시지 완료 처리 오류: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"메시지 완료 처리 오류: {str(e)}")
+    
+    return {
+        "success": True,
+        "message": "Message completed successfully",
+        "message_id": message.id
+    }
 
 @router.put("/conversations/{conversation_id}")
 def update_conversation_title(

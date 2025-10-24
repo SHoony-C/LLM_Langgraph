@@ -446,6 +446,8 @@ export default {
     },
     async selectConversation(conversation) {
       try {
+        console.log('🔄 대화 선택 시작:', conversation.id);
+        
         // 대화의 메시지를 별도로 가져오기
         const response = await fetch(`http://localhost:8000/api/conversations/${conversation.id}/messages`, {
           method: 'GET',
@@ -458,11 +460,26 @@ export default {
         
         if (response.ok) {
           const data = await response.json();
+          // console.log('✅ API 응답 성공:', {
+          //   conversationId: data.conversation_id,
+          //   messageCount: data.messages?.length || 0
+          // });
+          
           // 메시지가 포함된 대화 객체 생성
           const conversationWithMessages = {
             ...conversation,
             messages: data.messages || []
           };
+          
+          // console.log('📝 생성된 대화 객체:', {
+          //   id: conversationWithMessages.id,
+          //   messageCount: conversationWithMessages.messages.length,
+          //   firstMessage: conversationWithMessages.messages[0] ? {
+          //     id: conversationWithMessages.messages[0].id,
+          //     role: conversationWithMessages.messages[0].role,
+          //     q_mode: conversationWithMessages.messages[0].q_mode
+          //   } : null
+          // });
           
           // 대화를 store에 설정 (랭그래프 복원 트리거)
           this.$store.commit('setCurrentConversation', conversationWithMessages);
@@ -478,12 +495,17 @@ export default {
             messageCount: data.messages?.length || 0
           });
         } else {
-          console.error('대화 메시지 가져오기 실패:', response.status);
+          const errorText = await response.text();
+          console.error('❌ 대화 메시지 가져오기 실패:', {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorText
+          });
           // 실패 시 메시지 없는 대화로 설정
           this.$store.commit('setCurrentConversation', conversation);
         }
       } catch (error) {
-        console.error('대화 선택 오류:', error);
+        console.error('❌ 대화 선택 오류:', error);
         // 오류 시 메시지 없는 대화로 설정
         this.$store.commit('setCurrentConversation', conversation);
       }
@@ -626,6 +648,7 @@ export default {
           user-select: none !important;
         }
       `;
+      // CSP trusted-types 'none' 설정으로 인해 Trusted Types API 사용하지 않음
       document.head.appendChild(style);
       
     },

@@ -90,7 +90,6 @@ import {
 } from '@/utils/additionalQuestionHandler.js';
 import {
   restoreLanggraphFromConversation,
-  restoreCurrentConversation,
   restoreLanggraphFromCurrentMessages
 } from '@/utils/conversationRestorer.js';
 import {
@@ -197,9 +196,19 @@ export default {
     // 피드백 처리
     async submitFeedback(messageId, feedback) {
       const currentMessage = this.currentMessages.find(m => m.id === messageId);
-      if (!currentMessage) return;
+      if (!currentMessage) {
+        console.warn('⚠️ 피드백 처리 실패: 메시지를 찾을 수 없음', messageId);
+        return;
+      }
       
-      await this.$store.dispatch('submitFeedback', { messageId, feedback });
+      console.log('👍 피드백 처리 시작:', { messageId, feedback, currentFeedback: currentMessage.feedback });
+      
+      try {
+        await this.$store.dispatch('submitFeedback', { messageId, feedback });
+        console.log('✅ 피드백 처리 완료');
+      } catch (error) {
+        console.error('❌ 피드백 처리 실패:', error);
+      }
     },
 
     // 입력 변경 처리 (텍스트 영역 높이 조정)
@@ -263,6 +272,9 @@ export default {
       // 캐시 초기화
       this.lastRestoredConversationId = null;
       this.lastRestoredMessageCount = 0;
+      
+      // 랭그래프 캐시 초기화 (다른 대화로 전환 시 복원 가능하도록)
+      this.langgraph.lastRestoredConversationId.value = null;
       
       // 즉시 DB에 새 대화 생성 (ChatGPT 방식)
       try {
@@ -362,16 +374,7 @@ export default {
     },
   },
   beforeUnmount() {
-    // WebSocket 연결 해제
-            if (this.websocket && this.websocket.readyState !== WebSocket.CLOSED) {
-          try {
-            this.websocket.close();
-          } catch (error) {
-            console.error('WebSocket 연결 해제 중 오류:', error);
-          } finally {
-            this.websocket = null;
-          }
-        }
+    // WebSocket 사용하지 않음
   },
   mounted() {
     this.$nextTick(() => {
@@ -386,21 +389,9 @@ export default {
       this.newConversation();
       this.$store.commit('setLoginNewConversation', false); // 플래그 리셋
       // console.log('✅ 로그인 후 새 대화창 초기화 완료');
-    } else {
-      // 새로고침 시 현재 대화가 있고, 새 대화가 아닌 경우에만 복원
-      if (this.$store.state.currentConversation && !this.isNewConversation) {
-        console.log('🔄 기존 대화 복원 시작');
-        restoreCurrentConversation(this).then(() => {
-          // 복원 후 UI 강제 업데이트
-          this.$forceUpdate();
-          this.$nextTick(() => {
-            this.scroll?.scrollToBottom(this.$refs.chatMessages);
-          });
-        });
-      } else if (this.$store.state.currentConversation && this.isNewConversation) {
-        console.log('📝 새 대화 상태 - 복원 스킵');
-      }
-    }
+    } 
+    // watcher에서 자동으로 복원하므로 mounted에서는 처리하지 않음
+    // (중복 API 호출 방지)
   },
   updated() {
     // popup 상태 변경 중에는 스크롤하지 않음
@@ -432,13 +423,10 @@ export default {
     },
     // 현재 대화가 변경될 때 스크롤을 맨 아래로 이동하고 랭그래프 복원 (캐시 제거)
     '$store.state.currentConversation'(newConversation) {
-      // 랭그래프 완료 직후에는 복원 스킵
+      // 랭그래프 완료 직후에는 아무것도 하지 않음 (상태 유지)
       if (this.langgraph.isLanggraphJustCompleted.value) {
-        console.log('✅ 랭그래프 완료 직후 - 복원 스킵');
-        this.$nextTick(() => {
-          this.scroll?.scrollToBottom(this.$refs.chatMessages);
-        });
-        return;
+        console.log('✅ 랭그래프 완료 직후 - watcher 완전 스킵하여 상태 유지');
+        return; // 스크롤도 하지 않음
       }
       
       // 기존 대화 선택 시 실시간 기능 비활성화
@@ -450,7 +438,7 @@ export default {
       
       // 새 대화 생성 중이면 복원하지 않음
       if (this.isNewConversation) {
-        console.log('📝 새 대화 생성 중 - 랭그래프 복원 스킵');
+        // console.log('📝 새 대화 생성 중 - 랭그래프 복원 스킵');
         this.$nextTick(() => {
           this.scroll?.scrollToBottom(this.$refs.chatMessages);
         });
@@ -462,17 +450,62 @@ export default {
         this.scroll?.scrollToBottom(this.$refs.chatMessages);
         
         // 랭그래프 복원 로직 (비동기) - 새 대화가 아닌 경우에만 복원
-        if (newConversation && newConversation.messages) {
-          console.log('🔄 기존 대화 선택 - 랭그래프 복원 시작');
-          // 비동기 처리로 UI 블로킹 방지
-          setTimeout(async () => {
-            await restoreLanggraphFromConversation(newConversation, this);
-            // 복원 후 UI 강제 업데이트
-            this.$forceUpdate();
-            this.$nextTick(() => {
-              this.scroll?.scrollToBottom(this.$refs.chatMessages);
-            });
-          }, 0);
+        if (newConversation) {
+          // 메시지가 있는 경우 바로 복원
+          if (newConversation.messages && newConversation.messages.length > 0) {
+            console.log('🔄 기존 대화 선택 - 랭그래프 복원 시작 (메시지 있음)');
+            // 비동기 처리로 UI 블로킹 방지
+            setTimeout(async () => {
+              await restoreLanggraphFromConversation(newConversation, this);
+              // 복원 후 UI 강제 업데이트
+              this.$forceUpdate();
+              this.$nextTick(() => {
+                this.scroll?.scrollToBottom(this.$refs.chatMessages);
+              });
+            }, 0);
+          } else {
+            // 메시지가 없는 경우 (새로고침 등) API로 가져와서 복원
+            console.log('🔄 메시지 없음 - API로 메시지 가져오기:', newConversation.id);
+            setTimeout(async () => {
+              try {
+                const response = await fetch(`http://localhost:8000/api/conversations/${newConversation.id}/messages`, {
+                  method: 'GET',
+                  headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+                    'Content-Type': 'application/json'
+                  },
+                  credentials: 'include'
+                });
+                
+                if (response.ok) {
+                  const data = await response.json();
+                  console.log('✅ 메시지 가져오기 성공:', data.messages?.length || 0, '개');
+                  
+                  // 메시지를 포함한 대화 객체 생성
+                  const conversationWithMessages = {
+                    ...newConversation,
+                    messages: data.messages || []
+                  };
+                  
+                  // store 업데이트 (watcher 재실행 방지를 위해 조용히 업데이트)
+                  this.$store.state.currentConversation.messages = data.messages || [];
+                  
+                  // 랭그래프 복원
+                  await restoreLanggraphFromConversation(conversationWithMessages, this);
+                  
+                  // UI 업데이트
+                  this.$forceUpdate();
+                  this.$nextTick(() => {
+                    this.scroll?.scrollToBottom(this.$refs.chatMessages);
+                  });
+                } else {
+                  console.error('❌ 메시지 가져오기 실패:', response.status);
+                }
+              } catch (error) {
+                console.error('❌ 메시지 가져오기 오류:', error);
+              }
+            }, 0);
+          }
         }
       });
     },
@@ -516,6 +549,7 @@ export default {
     },
     // 피드백 업데이트 트리거 감시
     '$store.state._feedbackUpdateTrigger'() {
+      console.log('🔄 피드백 업데이트 트리거 감지:', this.$store.state._feedbackUpdateTrigger);
       // 피드백 변경 후 랭그래프 상태 복원
       restoreLanggraphFromCurrentMessages(this);
     },
@@ -529,6 +563,12 @@ export default {
         // 새 대화 생성
         this.newConversation();
       }
+    },
+    // currentMessages 변경 감지하여 빈 메시지일 때 랭그래프 숨기기
+    currentMessages(newMessages) {
+      if (!newMessages || newMessages.length === 0) {
+        this.langgraph.showLanggraph.value = false;
+      }
     }
   },
   
@@ -539,11 +579,7 @@ export default {
       this.scrollTimeout = null;
     }
     
-    // WebSocket 연결 정리
-    if (this.websocket) {
-      this.websocket.close();
-      this.websocket = null;
-    }
+    // WebSocket 사용하지 않음
     
     // Observer 정리
     if (this.observer) {

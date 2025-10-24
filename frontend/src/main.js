@@ -484,6 +484,36 @@ const store = createStore({
         state.currentConversation.messages.push(message);
       }
     },
+    updateMessageId(state, { tempId, realId, additionalData }) {
+      if (state.currentConversation && Array.isArray(state.currentConversation.messages)) {
+        const message = state.currentConversation.messages.find(m => m.id === tempId);
+        if (message) {
+          // ID만 조용히 업데이트 (깜빡임 방지)
+          message.id = realId;
+          // 추가 데이터가 있으면 병합
+          if (additionalData) {
+            Object.assign(message, additionalData);
+          }
+          console.log(`✅ 메시지 ID 업데이트 완료: ${tempId} → ${realId}`);
+        } else {
+          console.warn(`⚠️ 업데이트할 메시지를 찾을 수 없음: ${tempId}`);
+        }
+      }
+    },
+    updateMessageContent(state, { messageId, content, image }) {
+      if (state.currentConversation && Array.isArray(state.currentConversation.messages)) {
+        const message = state.currentConversation.messages.find(m => m.id === messageId);
+        if (message) {
+          message.ans = content;
+          if (image) {
+            message.image = image;
+          }
+          console.log(`✅ 메시지 내용 업데이트 완료: ${messageId}`);
+        } else {
+          console.warn(`⚠️ 업데이트할 메시지를 찾을 수 없음: ${messageId}`);
+        }
+      }
+    },
     updateFeedback(state, { conversationId, messageId, feedback }) {
       // 전체 conversations 배열을 완전히 새로 생성
       const newConversations = state.conversations.map(conversation => {
@@ -542,8 +572,8 @@ const store = createStore({
         }
       }
       
-      // 반응성 트리거 업데이트
-      state._feedbackUpdateTrigger = Date.now();
+      // 반응성 트리거 업데이트 (submitFeedback 액션에서 처리)
+      // state._feedbackUpdateTrigger = Date.now();
     },
     setApiKeyError(state, error) {
       state.apiKeyError = error;
@@ -673,6 +703,10 @@ const store = createStore({
     setLoginNewConversation(state, value) {
       state.loginNewConversation = value;
     },
+    incrementFeedbackUpdateTrigger(state) {
+      state._feedbackUpdateTrigger = Date.now();
+      console.log('🔄 피드백 업데이트 트리거 증가:', state._feedbackUpdateTrigger);
+    },
   },
   actions: {
     // 인증 에러 공통 처리 함수
@@ -800,7 +834,7 @@ const store = createStore({
           const savedConversationId = sessionStorage.getItem('currentConversationId');
           if (savedConversationId) {
             currentConversationId = parseInt(savedConversationId, 10);
-            console.log('🔄 새로고침 - sessionStorage에서 대화 ID 복원:', currentConversationId);
+            // console.log('🔄 새로고침 - sessionStorage에서 대화 ID 복원:', currentConversationId);
           }
         }
         
@@ -816,8 +850,21 @@ const store = createStore({
           if (currentConversationId && data.length > 0) {
             const existingConversation = data.find(c => c.id === currentConversationId);
             if (existingConversation) {
-              commit('setCurrentConversation', existingConversation);
-              console.log('✅ 기존 대화 복원 완료:', currentConversationId);
+              // 현재 대화에 메시지가 있으면 보존 (랭그래프 완료 시 메시지 손실 방지)
+              if (state.currentConversation && state.currentConversation.messages && state.currentConversation.messages.length > 0) {
+                console.log('✅ 기존 메시지 보존:', state.currentConversation.messages.length, '개');
+                // 메시지를 보존하면서 대화 정보만 업데이트
+                const updatedConversation = {
+                  ...existingConversation,
+                  messages: state.currentConversation.messages // 기존 메시지 보존
+                };
+                commit('setCurrentConversation', updatedConversation);
+                console.log('✅ 대화 정보 업데이트 완료 (메시지 보존):', currentConversationId);
+              } else {
+                // 메시지가 없으면 그대로 설정
+                commit('setCurrentConversation', existingConversation);
+                console.log('✅ 기존 대화 복원 완료:', currentConversationId);
+              }
             } else {
               // 선택한 대화가 삭제된 경우 첫 번째 대화 선택
               commit('setCurrentConversation', data[0]);
@@ -976,20 +1023,7 @@ const store = createStore({
           return;
         }
         
-        // DB에 저장된 실제 메시지 ID 확인 (임시 ID가 아닌지 체크)
-        // 임시 ID는 타임스탬프 기반의 큰 숫자 (예: 1760977008266)
-        const isTemporaryId = messageId > 1000000000000; // 13자리 이상이면 임시 ID로 간주
-        
-        if (isTemporaryId) {
-          console.warn('임시 메시지 ID로 피드백을 보낼 수 없습니다:', messageId);
-          console.warn('메시지 정보:', {
-            id: message.id,
-            question: message.question?.substring(0, 50),
-            ans: message.ans?.substring(0, 50)
-          });
-          alert('메시지가 아직 저장되지 않았습니다. 잠시 후 다시 시도해주세요.');
-          return;
-        }
+        // 이제 모든 메시지는 영구 ID를 사용하므로 임시 ID 체크 제거
         
         // 토글 로직: 같은 피드백을 다시 클릭하면 null로 설정 (제거)
         const newFeedback = message.feedback === feedback ? null : feedback;
@@ -1011,7 +1045,25 @@ const store = createStore({
         // 백엔드 API 요청 데이터 로깅
         const requestData = { feedback: newFeedback };
         
-        const response = await fetch(`http://localhost:8000/api/messages/${messageId}/feedback`, {
+        // 메시지에서 backend_id 추출 (우선순위: backend_id > messageId에서 -assistant 제거)
+        let cleanMessageId;
+        if (message.backend_id) {
+          cleanMessageId = message.backend_id;
+          console.log('✅ backend_id 사용:', cleanMessageId);
+        } else {
+          // fallback: messageId에서 -assistant 부분 제거
+          cleanMessageId = String(messageId).replace('-assistant', '');
+          console.log('⚠️ fallback ID 사용:', cleanMessageId);
+        }
+        
+        // 백엔드 ID가 숫자인지 확인
+        if (isNaN(cleanMessageId)) {
+          console.error('유효하지 않은 메시지 ID:', messageId, 'backend_id:', message.backend_id);
+          alert('메시지 ID가 유효하지 않습니다.');
+          return;
+        }
+        
+        const response = await fetch(`http://localhost:8000/api/messages/${cleanMessageId}/feedback`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1036,14 +1088,32 @@ const store = createStore({
           }
           
           const errorText = await response.text();
-                  let errorData;
-        try {
-          errorData = JSON.parse(errorText);
-        } catch (e) {
-          errorData = { detail: errorText };
-        }
+          let errorData;
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {
+            errorData = { detail: errorText };
+          }
+          
+          console.error('피드백 제출 실패:', {
+            status: response.status,
+            messageId: cleanMessageId,
+            originalMessageId: messageId,
+            backend_id: message.backend_id,
+            error: errorData.detail || errorText
+          });
+          
           throw new Error(`Failed to submit feedback: ${errorData.detail || errorText}`);
         }
+        
+        // 피드백 업데이트 성공 시 UI 트리거 증가 (즉시 반영)
+        commit('incrementFeedbackUpdateTrigger');
+        
+        console.log('✅ 피드백 업데이트 완료:', {
+          messageId,
+          feedback: newFeedback,
+          triggerValue: state._feedbackUpdateTrigger
+        });
         
 
         
@@ -1069,18 +1139,60 @@ const store = createStore({
         
         const currentConversationId = state.currentConversation.id;
         
+        // 1. 먼저 영구 message_id 발급
+        const prepareResponse = await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/messages/prepare`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          },
+          body: JSON.stringify({ 
+            question: text,
+            conversation_id: currentConversationId
+          }),
+          credentials: 'include'
+        });
+        
+        if (!prepareResponse.ok) {
+          if (prepareResponse.status === 401) {
+            await this.dispatch('handleAuthError');
+            return;
+          }
+          throw new Error(`Prepare message failed: ${prepareResponse.status}`);
+        }
+        
+        const preparedData = await prepareResponse.json();
+        console.log('✅ 영구 메시지 ID 발급 완료:', preparedData);
+        
+        // 2. 영구 ID로 메시지 추가 (피드백 버튼 비활성화 상태)
         const userMessage = {
-          id: Date.now(),
+          id: `${preparedData.userMessage.id}-user`,
           conversation_id: currentConversationId,
           role: 'user',
           question: text,
-          model: 'gpt-3.5-turbo', // 고정값으로 변경
-          created_at: new Date().toISOString()
+          ans: '',
+          created_at: new Date().toISOString(),
+          backend_id: preparedData.userMessage.id
+        };
+        
+        const assistantMessage = {
+          id: `${preparedData.assistantMessage.id}-assistant`,
+          conversation_id: currentConversationId,
+          role: 'assistant',
+          question: '',
+          ans: '', // 아직 답변 없음 (스트리밍 중)
+          created_at: new Date().toISOString(),
+          backend_id: preparedData.assistantMessage.id
         };
         
         commit('addMessage', {
           conversationId: currentConversationId,
           message: userMessage
+        });
+        
+        commit('addMessage', {
+          conversationId: currentConversationId,
+          message: assistantMessage
         });
         
         commit('setIsStreaming', true);
@@ -1134,6 +1246,38 @@ const store = createStore({
               
               if (content === '[DONE]') {
                 streamingActive = false;
+                
+                // 3. 스트리밍 완료 시 메시지 내용 업데이트
+                try {
+                  const completeResponse = await fetch(`http://localhost:8000/api/messages/${preparedData.assistantMessage.id}/complete`, {
+                    method: 'PUT',
+                    headers: { 
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    },
+                    body: JSON.stringify({ 
+                      assistant_response: accumulatedMessage,
+                      image_url: imageUrl
+                    }),
+                    credentials: 'include'
+                  });
+                  
+                  if (completeResponse.ok) {
+                    console.log('✅ 메시지 완료 처리 성공');
+                    
+                    // 프론트엔드에서도 메시지 내용 업데이트
+                    commit('updateMessageContent', {
+                      messageId: `${preparedData.assistantMessage.id}-assistant`,
+                      content: accumulatedMessage,
+                      image: imageUrl
+                    });
+                  } else {
+                    console.warn('⚠️ 메시지 완료 처리 실패:', completeResponse.status);
+                  }
+                } catch (completeError) {
+                  console.warn('⚠️ 메시지 완료 처리 오류:', completeError);
+                }
+                
                 break;
               }
               
@@ -1156,25 +1300,7 @@ const store = createStore({
           }
         }
         
-        const assistantMessage = {
-          id: Date.now() + 1,
-          conversation_id: currentConversationId,
-          role: 'assistant',
-          question: text,
-          ans: accumulatedMessage,
-          model: 'gpt-3.5-turbo', // 고정값으로 변경
-          created_at: new Date().toISOString()
-        };
-        
-        // 이미지 URL이 있는 경우 추가
-        if (imageUrl) {
-          assistantMessage.image = imageUrl;
-        }
-        
-        commit('addStreamingMessageToConversation', {
-          conversationId: currentConversationId,
-          message: assistantMessage
-        });
+        // assistantMessage는 이미 영구 ID로 생성되었으므로 제거
         
           // 백엔드 저장 시도
           try {

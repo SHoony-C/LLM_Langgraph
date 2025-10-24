@@ -566,7 +566,17 @@ async def node_rc_rag(state: SearchState) -> SearchState:
                             "title": candidate.get("res_payload", {}).get("document_name", "제목 없음"),
                             "text": candidate.get("res_payload", {}).get("vector", {}).get("text", "내용 없음"),
                             "summary": candidate.get("res_payload", {}).get("vector", {}).get("summary_result", "요약 없음"),
-                            "image_url": candidate.get("res_payload", {}).get("vector", {}).get("image_url", ""),
+                            "image_url": (
+                                # Qdrant payload 최상위에서 image_url 추출
+                                candidate.get("res_payload", {}).get("image_url", [""])[0] 
+                                if isinstance(candidate.get("res_payload", {}).get("image_url", ""), list)
+                                else candidate.get("res_payload", {}).get("image_url", "")
+                            ) or (
+                                # vector 내부에서 image_url 추출 (폴백)
+                                candidate.get("res_payload", {}).get("vector", {}).get("image_url", [""])[0]
+                                if isinstance(candidate.get("res_payload", {}).get("vector", {}).get("image_url", ""), list)
+                                else candidate.get("res_payload", {}).get("vector", {}).get("image_url", "")
+                            ),
                             "score": candidate.get("res_score", 0)
                         }
                         for candidate in candidates_total[:5]  # 상위 5개만
@@ -845,26 +855,79 @@ async def node_rc_answer(state: SearchState) -> SearchState:
 
 ⚠️ {error_desc}"""
             
-            # 이미지 URL 생성 (첫 번째 문서 기반)
+            # 이미지 URL 추출 (Qdrant payload에서 직접 가져오기)
+            print(f"[Answer] 🖼️ [IMAGE URL 추출 시작]")
+            print(f"[Answer] 🖼️ [IMAGE URL] top_result 존재: {bool(top_result)}")
+            print(f"[Answer] 🖼️ [IMAGE URL] top_payload 존재: {bool(top_payload)}")
+            
+            if top_payload:
+                print(f"[Answer] 🖼️ [IMAGE URL] top_payload 키 목록: {list(top_payload.keys())}")
+                print(f"[Answer] 🖼️ [IMAGE URL] top_payload 전체: {top_payload}")
+            
             image_url = None
             if top_result and top_payload:
-                doc_title = top_payload.get('document_name', '')
-                doc_index = top_result.get('res_id', 0)
-                
-                if doc_title and doc_index:
-                    import urllib.parse
-                    import os
-                    # .txt 확장자 제거하고 _whole.jpg로 대체
-                    if doc_title.endswith('.txt'):
-                        doc_title_without_ext = doc_title[:-4]  # .txt 제거
-                        image_filename = f"{doc_title_without_ext}_whole.jpg"
-                    else:
-                        # 확장자가 없거나 다른 경우 그대로 사용
-                        image_filename = doc_title
+                # Qdrant payload 구조: payload 최상위에 image_url이 배열로 저장됨
+                # 예: image_url: [0:"/appdata/RC/images/daily_note_1_whole.jpg"]
+                if 'image_url' in top_payload:
+                    img_url = top_payload.get('image_url', '')
+                    print(f"[Answer] 🖼️ [IMAGE URL] payload에서 image_url 발견: {img_url} (타입: {type(img_url).__name__})")
                     
-                    safe_title = urllib.parse.quote(image_filename, safe='')
-                    image_url = f"{IMAGE_BASE_URL}{IMAGE_PATH_PREFIX}/{safe_title}"
-                    print(f"[Answer] 🖼️ 생성된 이미지 URL: {image_url}")
+                    if isinstance(img_url, list) and len(img_url) > 0:
+                        # 배열의 첫 번째 값 사용
+                        image_url = img_url[0]
+                        print(f"[Answer] ✅ [IMAGE URL] Qdrant에서 추출한 이미지 URL (배열): {image_url}")
+                    elif isinstance(img_url, str) and img_url:
+                        image_url = img_url
+                        print(f"[Answer] ✅ [IMAGE URL] Qdrant에서 추출한 이미지 URL (문자열): {image_url}")
+                    else:
+                        print(f"[Answer] ⚠️ [IMAGE URL] image_url 값이 예상과 다름: {img_url}")
+                else:
+                    print(f"[Answer] 🖼️ [IMAGE URL] payload 최상위에 image_url 없음, vector 내부 확인")
+                
+                # vector 내부에도 확인
+                if not image_url and 'vector' in top_payload and isinstance(top_payload['vector'], dict):
+                    vector_data = top_payload['vector']
+                    print(f"[Answer] 🖼️ [IMAGE URL] vector 데이터 키 목록: {list(vector_data.keys())}")
+                    
+                    if 'image_url' in vector_data:
+                        img_url = vector_data.get('image_url', '')
+                        print(f"[Answer] 🖼️ [IMAGE URL] vector에서 image_url 발견: {img_url} (타입: {type(img_url).__name__})")
+                        
+                        if isinstance(img_url, list) and len(img_url) > 0:
+                            image_url = img_url[0]
+                            print(f"[Answer] ✅ [IMAGE URL] Qdrant vector에서 추출한 이미지 URL (배열): {image_url}")
+                        elif isinstance(img_url, str) and img_url:
+                            image_url = img_url
+                            print(f"[Answer] ✅ [IMAGE URL] Qdrant vector에서 추출한 이미지 URL (문자열): {image_url}")
+                    else:
+                        print(f"[Answer] ⚠️ [IMAGE URL] vector 내부에도 image_url 없음")
+                
+                # Qdrant에 image_url이 없으면 문서명 기반으로 생성 (폴백)
+                if not image_url:
+                    print(f"[Answer] 🖼️ [IMAGE URL] Qdrant에 image_url 없음 - 폴백 모드 진입")
+                    doc_title = top_payload.get('document_name', '')
+                    doc_index = top_result.get('res_id', 0)
+                    
+                    if doc_title and doc_index:
+                        import urllib.parse
+                        import os
+                        # .txt 확장자 제거하고 _whole.jpg로 대체
+                        if doc_title.endswith('.txt'):
+                            doc_title_without_ext = doc_title[:-4]  # .txt 제거
+                            image_filename = f"{doc_title_without_ext}_whole.jpg"
+                        else:
+                            # 확장자가 없거나 다른 경우 그대로 사용
+                            image_filename = doc_title
+                        
+                        safe_title = urllib.parse.quote(image_filename, safe='')
+                        image_url = f"{IMAGE_BASE_URL}{IMAGE_PATH_PREFIX}/{safe_title}"
+                        print(f"[Answer] 🖼️ [IMAGE URL] 폴백: 문서명 기반으로 생성된 이미지 URL: {image_url}")
+                    else:
+                        print(f"[Answer] ⚠️ [IMAGE URL] 폴백 실패: doc_title 또는 doc_index 없음")
+                else:
+                    print(f"[Answer] ✅ [IMAGE URL] 최종 추출 완료: {image_url}")
+            else:
+                print(f"[Answer] ⚠️ [IMAGE URL] top_result 또는 top_payload 없음 - image_url 추출 실패")
 
             # LangGraph 실행 결과를 위한 완전한 응답 구조
             response = {
@@ -886,7 +949,11 @@ async def node_rc_answer(state: SearchState) -> SearchState:
             }
         
         # 최종 완료 상태 전송
+        print(f"[Answer] 🖼️ [IMAGE URL SSE 전송] response 구조: {response.keys()}")
+        print(f"[Answer] 🖼️ [IMAGE URL SSE 전송] analysis_image_url 값: {response.get('analysis_image_url')}")
+        
         if generator_id:
+            print(f"[Answer] 🖼️ [IMAGE URL SSE 전송] SSE 메시지 전송 시작")
             await yield_node_status(
                 generator_id,
                 "E",
@@ -902,6 +969,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
                     "is_streaming": False
                 },
             )
+            print(f"[Answer] ✅ [IMAGE URL SSE 전송] SSE 메시지 전송 완료")
         
         print(f"[Answer] ✅ node_rc_answer 함수 완료")
         
@@ -1414,16 +1482,64 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                     print(f"[LANGGRAPH] 📊 결과 요약: keyword={len(result.get('keyword', []))}개, candidates={len(result.get('candidates_total', []))}개")
                     print(f"[LANGGRAPH] 🔍 실행 후 제너레이터 상태: active={generator.is_active}, queue_size={generator.message_queue.qsize()}")
                     
-                    # LangGraph 결과는 프론트엔드에서 저장 (중복 저장 방지)
-                    print(f"[LANGGRAPH] 💾 LangGraph 결과는 프론트엔드에서 저장됩니다.")
+                    # message_id가 있는 경우 기존 메시지 업데이트
+                    if request.message_id:
+                        print(f"[LANGGRAPH] 💾 기존 메시지 업데이트: message_id={request.message_id}")
+                        try:
+                            # 기존 메시지 찾기
+                            existing_message = db.query(Message).filter(
+                                Message.id == request.message_id,
+                                Message.conversation_id == request.conversation_id
+                            ).first()
+                            
+                            if existing_message:
+                                # LangGraph 결과에서 답변 추출
+                                answer = ""
+                                if isinstance(result.get('response'), dict):
+                                    answer = result.get('response', {}).get('answer', '')
+                                elif isinstance(result.get('response'), list) and len(result.get('response', [])) > 0:
+                                    answer = result.get('response', [0]).get('answer', '')
+                                
+                                # 메시지 업데이트
+                                existing_message.ans = answer
+                                existing_message.keyword = json.dumps(result.get('keyword', []), ensure_ascii=False)
+                                existing_message.db_contents = json.dumps(result.get('candidates_total', []), ensure_ascii=False)
+                                
+                                # 이미지 URL이 있는 경우 추가 처리
+                                if isinstance(result.get('response'), dict):
+                                    analysis_image_url = result.get('response', {}).get('analysis_image_url')
+                                    if analysis_image_url:
+                                        # 이미지 URL을 별도 필드에 저장하거나 메시지에 포함
+                                        print(f"[LANGGRAPH] 🖼️ 분석 이미지 URL 저장: {analysis_image_url}")
+                                
+                                db.commit()
+                                print(f"[LANGGRAPH] ✅ 메시지 업데이트 완료: {request.message_id}")
+                            else:
+                                print(f"[LANGGRAPH] ⚠️ 메시지를 찾을 수 없음: {request.message_id}")
+                        except Exception as e:
+                            print(f"[LANGGRAPH] ❌ 메시지 업데이트 실패: {str(e)}")
+                            db.rollback()
+                    else:
+                        print(f"[LANGGRAPH] 💾 LangGraph 결과는 프론트엔드에서 저장됩니다.")
                     
                     # DONE 메시지에 전체 LangGraph 결과 포함
+                    print(f"[LANGGRAPH] 🖼️ [IMAGE URL DONE 메시지] result 구조: {result.keys()}")
+                    print(f"[LANGGRAPH] 🖼️ [IMAGE URL DONE 메시지] response 구조: {result.get('response', {}).keys() if isinstance(result.get('response'), dict) else type(result.get('response'))}")
+                    
+                    analysis_image_url = None
+                    if isinstance(result.get('response'), dict):
+                        analysis_image_url = result.get('response', {}).get('analysis_image_url')
+                        print(f"[LANGGRAPH] 🖼️ [IMAGE URL DONE 메시지] analysis_image_url 값: {analysis_image_url}")
+                    else:
+                        print(f"[LANGGRAPH] ⚠️ [IMAGE URL DONE 메시지] response가 dict가 아님")
+                    
                     done_message = {
                         "stage": "DONE", 
                         "result": result,  # 전체 LangGraph 결과 포함
                         "keyword": result.get('keyword', []),
                         "candidates_total": result.get('candidates_total', [])
                     }
+                    print(f"[LANGGRAPH] 🖼️ [IMAGE URL DONE 메시지] done_message에 포함된 analysis_image_url: {done_message.get('result', {}).get('response', {}).get('analysis_image_url') if isinstance(done_message.get('result', {}).get('response'), dict) else 'N/A'}")
                     print(f"[LANGGRAPH] 📤 DONE 메시지 전송 시도 (큐 크기: {generator.message_queue.qsize()})")
                     await generator.send_message(done_message)
                     print(f"[LANGGRAPH] ✅ DONE 메시지 전송 완료 (큐 크기: {generator.message_queue.qsize()})")

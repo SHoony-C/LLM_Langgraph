@@ -144,7 +144,21 @@ export async function saveLangGraphMessage(result, context) {
     });
     
     if (response.ok) {
-      await response.json();
+      const responseData = await response.json();
+      console.log('✅ LangGraph 메시지 저장 응답:', responseData);
+      
+      // 백엔드에서 생성된 메시지 ID를 프론트엔드 메시지에 설정
+      if (responseData.userMessage && responseData.userMessage.id) {
+        // 현재 대화의 마지막 메시지(방금 추가한 assistant 메시지)에 backend_id 설정
+        const currentConversation = context.$store.state.currentConversation;
+        if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
+          const lastMessage = currentConversation.messages[currentConversation.messages.length - 1];
+          if (lastMessage.role === 'assistant' && !lastMessage.backend_id) {
+            lastMessage.backend_id = responseData.userMessage.id;
+            console.log('✅ LangGraph 메시지에 backend_id 설정:', responseData.userMessage.id);
+          }
+        }
+      }
       
       // 대화 제목 업데이트 (질문의 첫 50자로)
       if (context.$store.state.currentConversation) {
@@ -176,16 +190,20 @@ export async function saveLangGraphMessage(result, context) {
         }
       }
       
-      // 대화 목록 새로고침
-      await context.$store.dispatch('fetchConversations');
+      // 대화 목록 새로고침은 sseMessageHandler.js에서 이미 호출하므로 여기서는 생략
+      // await context.$store.dispatch('fetchConversations');
+      
+      return responseData; // 백엔드 응답 데이터 반환
       
     } else {
       console.error('❌ LangGraph 메시지 저장 실패:', response.status, response.statusText);
       const errorText = await response.text();
       console.error('❌ 오류 응답 내용:', errorText);
+      throw new Error(`메시지 저장 실패: ${response.status} ${response.statusText}`);
     }
   } catch (error) {
     console.error('LangGraph 메시지 저장 중 오류:', error);
+    throw error;
   }
 }
 

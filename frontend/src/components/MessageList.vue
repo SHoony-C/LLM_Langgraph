@@ -18,24 +18,32 @@
       <!-- 메시지들 -->
       <div 
         v-for="message in currentMessages" 
-        :key="`msg-${message.id}-${message.role}-${message.feedback}-${feedbackUpdateTrigger}`" 
+        :key="`msg-${message.id}-${message.role}-${message.feedback || 'none'}-${feedbackUpdateTrigger}`" 
         :class="['message', message.role]"
       >
         <div class="message-content">
           <div class="message-text" v-if="message.role === 'user'">
-            {{ message.question || '' }}
+            <!-- 질문 표시 -->
+            <div class="question-text">{{ message.question || '' }}</div>
+            <!-- user 메시지의 ans 필드는 표시하지 않음 - 답변은 assistant 메시지로 분리 -->
           </div>
-          <div class="message-text" v-else>
+          <div class="message-text" v-else-if="message.role === 'assistant'">
+            <!-- assistant 메시지의 ans 내용 표시 -->
             <div v-html="formatAnswer(message.ans || '')"></div>
           </div>
         </div>
         
+        <!-- assistant 메시지에만 피드백 버튼 표시 -->
         <div v-if="message.role === 'assistant'" class="message-actions">
           <button 
             class="action-btn thumbs-up" 
-            :class="{ active: getMessageFeedback(message.id) === 'positive' }"
-            @click="$emit('submitFeedback', message.id, 'positive')"
-            :title="`Message ID: ${message.id}, Current: ${getMessageFeedback(message.id) || 'none'}, Toggle to: ${getMessageFeedback(message.id) === 'positive' ? 'none' : 'positive'}`"
+            :class="{ 
+              active: getMessageFeedback(message.id) === 'positive',
+              disabled: isStreaming || isMessageStreaming(message.id)
+            }"
+            @click="!isStreaming && !isMessageStreaming(message.id) && $emit('submitFeedback', message.id, 'positive')"
+            :disabled="isStreaming || isMessageStreaming(message.id)"
+            :title="getFeedbackButtonTitle(message.id, 'positive')"
           >
             <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
@@ -43,9 +51,13 @@
           </button>
           <button 
             class="action-btn thumbs-down" 
-            :class="{ active: getMessageFeedback(message.id) === 'negative' }"
-            @click="$emit('submitFeedback', message.id, 'negative')"
-            :title="`Message ID: ${message.id}, Current: ${getMessageFeedback(message.id) || 'none'}, Toggle to: ${getMessageFeedback(message.id) === 'negative' ? 'none' : 'negative'}`"
+            :class="{ 
+              active: getMessageFeedback(message.id) === 'negative',
+              disabled: isStreaming || isMessageStreaming(message.id)
+            }"
+            @click="!isStreaming && !isMessageStreaming(message.id) && $emit('submitFeedback', message.id, 'negative')"
+            :disabled="isStreaming || isMessageStreaming(message.id)"
+            :title="getFeedbackButtonTitle(message.id, 'negative')"
           >
             <svg class="action-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path>
@@ -56,12 +68,12 @@
       
       <!-- 스트리밍 중인 메시지 표시 -->
       <div 
-        v-if="isStreaming"
+        v-if="isStreaming && streamingVisible && streamingMessage"
         key="streaming-message"
         class="message assistant streaming"
         :style="{
           minHeight: lastMessageHeight + 'px',
-          opacity: streamingVisible ? 1 : 0
+          opacity: 1
         }"
       >
         <div class="message-content" ref="streamingContent">
@@ -170,7 +182,30 @@ export default {
     },
     getMessageFeedback(messageId) {
       const message = this.currentMessages.find(m => m.id === messageId);
-      return message ? message.feedback : null;
+      const feedback = message ? message.feedback : null;
+      // console.log('🔍 getMessageFeedback:', { messageId, feedback, messageExists: !!message });
+      return feedback;
+    },
+    isMessageStreaming(messageId) {
+      // 메시지가 스트리밍 중인지 확인
+      const message = this.currentMessages.find(m => m.id === messageId);
+      if (!message) return false;
+      
+      // 중요: 질문과 답변이 하나의 row에 저장되는 구조
+      // user 메시지의 ans 필드가 비어있고 현재 스트리밍 중일 때 스트리밍 중으로 간주
+      const isIncomplete = !message.ans || message.ans.trim() === '';
+      return isIncomplete && this.isStreaming && this.streamingVisible;
+    },
+    getFeedbackButtonTitle(messageId, feedbackType) {
+      const currentFeedback = this.getMessageFeedback(messageId);
+      const isStreaming = this.isStreaming || this.isMessageStreaming(messageId);
+      
+      if (isStreaming) {
+        return '답변이 완성되면 피드백을 남길 수 있습니다';
+      }
+      
+      const toggleTo = currentFeedback === feedbackType ? 'none' : feedbackType;
+      return `Message ID: ${messageId}, Current: ${currentFeedback || 'none'}, Toggle to: ${toggleTo}`;
     }
   }
 };
@@ -178,4 +213,16 @@ export default {
 
 <style scoped>
 @import '../assets/styles/home.css';
+
+/* 비활성화된 피드백 버튼 스타일 */
+.action-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.action-btn.disabled:hover {
+  background-color: transparent;
+  transform: none;
+}
 </style>

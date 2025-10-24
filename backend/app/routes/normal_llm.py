@@ -215,10 +215,10 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
         first_message = context["first_message"]
         
         # DB에서 첫 번째 질문과 관련된 RAG 검색 결과 재구성
-        print(f"[FOLLOWUP_STREAM] 📄 첫 번째 질문 RAG 정보:")
-        print(f"[FOLLOWUP_STREAM]   질문: {first_message.question}")
-        print(f"[FOLLOWUP_STREAM]   키워드: {first_message.keyword}")
-        print(f"[FOLLOWUP_STREAM]   검색 문서: {first_message.db_contents}")
+        # print(f"[FOLLOWUP_STREAM] 📄 첫 번째 질문 RAG 정보:")
+        # print(f"[FOLLOWUP_STREAM]   질문: {first_message.question}")
+        # print(f"[FOLLOWUP_STREAM]   키워드: {first_message.keyword}")
+        # print(f"[FOLLOWUP_STREAM]   검색 문서: {first_message.db_contents}")
         
         # 실제 RAG 문서 내용 구성 (DB에 저장된 db_contents 재사용)
         document_title = "검색된 문서"
@@ -316,7 +316,15 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
         return Response(content=f"Error: {str(e)}", media_type="text/plain")
 
 async def save_message_to_db(stream_request: StreamRequest, assistant_response: str, image_url: str = None, db: Session = None, current_user: User = None):
-    """스트리밍 완료 후 메시지를 DB에 저장"""
+    """
+    스트리밍 완료 후 메시지를 DB에 저장
+    
+    중요: 이 시스템에서는 질문과 답변이 하나의 Message row에 저장됩니다.
+    - question 필드: 사용자 질문
+    - ans 필드: AI 답변
+    - role: 'user' (질문과 답변이 모두 user 메시지에 포함)
+    - 별도의 assistant 메시지는 생성하지 않음
+    """
     try:
         if not db:
             print(f"[DB_SAVE] ❌ DB 세션이 없음")
@@ -357,6 +365,11 @@ async def save_message_to_db(stream_request: StreamRequest, assistant_response: 
         from datetime import datetime, timedelta
         recent_time = datetime.utcnow() - timedelta(seconds=30)
         
+        print(f"[DB_SAVE] 🔍 중복 저장 방지 확인:")
+        print(f"[DB_SAVE]   - conversation_id: {stream_request.conversation_id}")
+        print(f"[DB_SAVE]   - question: {stream_request.question[:50]}...")
+        print(f"[DB_SAVE]   - recent_time: {recent_time}")
+        
         existing_message = db.query(Message).filter(
             Message.conversation_id == stream_request.conversation_id,
             Message.question == stream_request.question,
@@ -365,9 +378,15 @@ async def save_message_to_db(stream_request: StreamRequest, assistant_response: 
         
         if existing_message:
             print(f"[DB_SAVE] ⚠️ 중복 메시지 감지됨. 기존 메시지 ID: {existing_message.id}")
+            print(f"[DB_SAVE]   - 기존 메시지 생성 시간: {existing_message.created_at}")
+            print(f"[DB_SAVE]   - 현재 시간: {datetime.utcnow()}")
             return
         
         # 메시지 생성 및 저장
+        # 중요: 질문과 답변이 하나의 row에 저장되는 구조
+        # - question: 사용자 질문
+        # - ans: AI 답변 (스트리밍 완료된 내용)
+        # - role: 'user' (질문과 답변이 모두 user 메시지에 포함)
         # q_mode는 conversation_id가 있는 경우 'add', 없는 경우 None
         # conversation_id가 있으면 기존 대화에 추가 질문이므로 'add'
         # conversation_id가 없으면 새 대화이므로 None (첫 번째 질문)
@@ -378,8 +397,8 @@ async def save_message_to_db(stream_request: StreamRequest, assistant_response: 
         message = Message(
             conversation_id=stream_request.conversation_id,
             role="user",
-            question=stream_request.question,
-            ans=assistant_response,
+            question=stream_request.question,  # 사용자 질문
+            ans=assistant_response,  # AI 답변 (스트리밍 완료된 내용)
             user_name=user_name,
             q_mode=q_mode_value,  # conversation_id가 있으면 'add', 없으면 None
             image=image_url
@@ -480,14 +499,45 @@ async def get_streaming_response_with_db_save(messages: List[Dict], request: Req
                     print(f"[LLM_STREAM_DB] Unexpected error during streaming lv1: {str(e)}")
                     return
         
-        # 스트리밍 완료 후 DB에 저장
-        try:
-            print(f"[LLM_STREAM_DB] 💾 DB 저장 시작")
-            await save_message_to_db(stream_request, text_response, image_url, db, current_user)
-            print(f"[LLM_STREAM_DB] ✅ DB 저장 완료")
-        except Exception as e:
-            print(f"[LLM_STREAM_DB] ❌ DB 저장 실패: {str(e)}")
-            # DB 저장 실패해도 스트리밍은 계속 진행
+        # 스트리밍 완료 후 DB에 저장 (추가질문의 경우 이미 prepare에서 저장되었으므로 스킵)
+        print(f"[LLM_STREAM_DB] 🔍 저장 조건 확인:")
+        print(f"[LLM_STREAM_DB]   - conversation_id: {stream_request.conversation_id}")
+        print(f"[LLM_STREAM_DB]   - q_mode: {getattr(stream_request, 'q_mode', 'None')}")
+        print(f"[LLM_STREAM_DB]   - is_add_question: {getattr(stream_request, 'q_mode', None) == 'add'}")
+        
+        if not stream_request.conversation_id or getattr(stream_request, 'q_mode', None) != "add":
+            try:
+                print(f"[LLM_STREAM_DB] 💾 DB 저장 시작 (일반 질문)")
+                await save_message_to_db(stream_request, text_response, image_url, db, current_user)
+                print(f"[LLM_STREAM_DB] ✅ DB 저장 완료")
+            except Exception as e:
+                print(f"[LLM_STREAM_DB] ❌ DB 저장 실패: {str(e)}")
+                # DB 저장 실패해도 스트리밍은 계속 진행
+        else:
+            # 추가질문인 경우 message_id가 있으면 기존 메시지 업데이트
+            if hasattr(stream_request, 'message_id') and stream_request.message_id:
+                try:
+                    print(f"[LLM_STREAM_DB] 💾 기존 메시지 업데이트: message_id={stream_request.message_id}")
+                    existing_message = db.query(Message).filter(
+                        Message.id == stream_request.message_id,
+                        Message.conversation_id == stream_request.conversation_id
+                    ).first()
+                    
+                    if existing_message:
+                        existing_message.ans = text_response
+                        if image_url:
+                            # 이미지 URL이 있는 경우 추가 처리 (필요시)
+                            print(f"[LLM_STREAM_DB] 🖼️ 이미지 URL 저장: {image_url}")
+                        db.commit()
+                        print(f"[LLM_STREAM_DB] ✅ 메시지 업데이트 완료: {stream_request.message_id}")
+                    else:
+                        print(f"[LLM_STREAM_DB] ⚠️ 메시지를 찾을 수 없음: {stream_request.message_id}")
+                except Exception as e:
+                    print(f"[LLM_STREAM_DB] ❌ 메시지 업데이트 실패: {str(e)}")
+                    db.rollback()
+            else:
+                print(f"[LLM_STREAM_DB] ⏭️ 추가질문 - message_id 없음, DB 저장 스킵")
+                print(f"[LLM_STREAM_DB]   - prepare 엔드포인트에서 이미 메시지가 생성되었으므로 중복 저장 방지")
         
         # 텍스트 응답이 완료된 후 이미지 URL이 있으면 전송
         if image_url:

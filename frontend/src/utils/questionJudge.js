@@ -11,7 +11,7 @@
  * @returns {Object} 판별 결과
  */
 export function judgeQuestionType(question, conversationId, conversationHistory = []) {
-    console.log('[QUESTION_JUDGE] 질문 유형 판별 시작');
+    // console.log('[QUESTION_JUDGE] 질문 유형 판별 시작');
     // console.log('[QUESTION_JUDGE] - 질문:', question);
     // console.log('[QUESTION_JUDGE] - 대화 ID:', conversationId);
     // console.log('[QUESTION_JUDGE] - 히스토리 길이:', conversationHistory.length);
@@ -38,26 +38,12 @@ export function judgeQuestionType(question, conversationId, conversationHistory 
         };
     }
 
-    // 3. 대화 히스토리에서 LangGraph 정보가 있는지 확인
-    const hasLangGraphInfo = conversationHistory.some(msg => 
-        msg.q_mode === 'search' || 
-        msg.keyword || 
-        msg.db_contents ||
-        msg.langgraph_result
-    );
-
-    if (!hasLangGraphInfo) {
-        console.log('[QUESTION_JUDGE] ✅ LangGraph 정보 없음 - 최초 질문으로 판별');
-        return {
-            isFirstQuestion: true,
-            questionType: 'first',
-            apiEndpoint: '/api/langgraph/stream',
-            reason: 'LangGraph 정보 없음'
-        };
-    }
-
-    // 4. 추가 질문으로 판별
-    console.log('[QUESTION_JUDGE] ✅ 기존 대화 - 추가 질문으로 판별');
+    // 3. conversationId가 있고 대화 히스토리가 있으면 추가 질문
+    // (LangGraph 정보 유무와 관계없이 기존 대화가 있으면 추가 질문)
+    console.log('[QUESTION_JUDGE] ✅ 기존 대화 존재 - 추가 질문으로 판별');
+    console.log('[QUESTION_JUDGE] - 대화 ID:', conversationId);
+    console.log('[QUESTION_JUDGE] - 히스토리 메시지 수:', conversationHistory.length);
+    
     return {
         isFirstQuestion: false,
         questionType: 'followup',

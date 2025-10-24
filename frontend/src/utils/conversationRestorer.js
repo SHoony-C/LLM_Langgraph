@@ -15,13 +15,20 @@ export async function restoreLanggraphFromConversation(conversation, context) {
 
   // 랭그래프 완료 직후에는 복원 스킵 (상태 유지)
   if (context.langgraph.isLanggraphJustCompleted.value) {
-    console.log('✅ 랭그래프 완료 직후 - 복원 스킵하여 상태 유지');
+    console.log('✅ 랭그래프 완료 직후 - 복원 스킵하여 상태 유지:', {
+      showLanggraph: context.langgraph.showLanggraph.value,
+      currentStep: context.langgraph.currentStep.value,
+      hasAnswer: !!context.langgraph.finalAnswer.value
+    });
     context.langgraph.isRestoringConversation.value = false;
+    // 캐시 업데이트 안 함 - 상태를 완전히 그대로 유지
     return;
   }
 
   // 캐시 확인 - 동일한 대화에 대해 이미 복원했다면 스킵 (성능 최적화)
-  if (context.langgraph.lastRestoredConversationId.value === conversation.id) {
+  // 단, 새 대화 생성 직후에는 캐시를 무시하여 다른 대화로 전환 시 복원 가능하도록 함
+  if (context.langgraph.lastRestoredConversationId.value === conversation.id && 
+      !context.isNewConversation) {
     console.log('📋 동일한 대화 이미 복원됨 - 스킵:', conversation.id);
     context.langgraph.isRestoringConversation.value = false;
     return;
@@ -58,6 +65,21 @@ export async function restoreLanggraphFromConversation(conversation, context) {
 
     // 대화의 메시지들에서 랭그래프 정보 찾기
     const messages = conversation.messages || [];
+    
+    // 메시지가 비어있으면 경고하고 랭그래프 숨기기
+    if (messages.length === 0) {
+      console.warn('⚠️ 대화 메시지가 비어있습니다. 대화 ID:', conversation.id);
+      // console.log('📋 전체 메시지 목록:', []);
+      // console.log('📭 LangGraph 정보 없음 - 일반 대화로 처리');
+      
+      // 랭그래프 영역 숨기기
+      context.langgraph.showLanggraph.value = false;
+      
+      context.langgraph.lastRestoredConversationId.value = conversation.id;
+      context.langgraph.isRestoringConversation.value = false;
+      return;
+    }
+    
     let langgraphMessage = null;
 
     // LangGraph 정보가 있는 메시지 찾기 (user 메시지 중 q_mode가 'search'이거나 keyword/db_contents가 있는 메시지)
@@ -70,14 +92,14 @@ export async function restoreLanggraphFromConversation(conversation, context) {
     }
     
     // 디버깅: 모든 메시지의 q_mode 출력
-    console.log('📋 전체 메시지 목록:', messages.map(m => ({
-      id: m.id,
-      role: m.role,
-      q_mode: m.q_mode,
-      has_keyword: !!m.keyword,
-      has_db_contents: !!m.db_contents,
-      has_image: !!m.image
-    })));
+    // console.log('📋 전체 메시지 목록:', messages.map(m => ({
+    //   id: m.id,
+    //   role: m.role,
+    //   q_mode: m.q_mode,
+    //   has_keyword: !!m.keyword,
+    //   has_db_contents: !!m.db_contents,
+    //   has_image: !!m.image
+    // })));
 
     if (langgraphMessage) {
       console.log('✅ LangGraph 메시지 발견:', langgraphMessage.id);
@@ -168,7 +190,7 @@ export async function restoreLanggraphFromConversation(conversation, context) {
         console.log('✅ 분석 이미지 URL 복원 완료');
       }
 
-      console.log('✅ 랭그래프 정보 복원 완료');
+      // console.log('✅ 랭그래프 정보 복원 완료');
     } else {
       console.log('📭 LangGraph 정보 없음 - 일반 대화로 처리');
     }
@@ -343,6 +365,13 @@ export function restoreLanggraphFromCurrentMessages(context) {
 
     // LangGraph 정보가 있는 메시지 찾기
     const messages = currentConversation.messages;
+    
+    // 메시지가 비어있으면 랭그래프 숨기기
+    if (messages.length === 0) {
+      console.warn('⚠️ 현재 대화 메시지가 비어있습니다.');
+      context.langgraph.showLanggraph.value = false;
+      return;
+    }
     let langgraphMessage = null;
 
     for (const message of messages) {

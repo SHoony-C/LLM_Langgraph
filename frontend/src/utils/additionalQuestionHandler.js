@@ -1,6 +1,12 @@
 /**
  * 추가 질문 처리 유틸리티
  * Home.vue의 추가 질문 관련 함수들을 분리하여 관리
+ * 
+ * 중요: 이 시스템에서는 질문과 답변이 하나의 Message row에 저장됩니다.
+ * - question 필드: 사용자 질문
+ * - ans 필드: AI 답변
+ * - role: 'user' (질문과 답변이 모두 user 메시지에 포함)
+ * - 별도의 assistant 메시지는 생성하지 않음
  */
 
 /**
@@ -22,17 +28,50 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
 
     console.log('💬 추가 질문 스트리밍 답변 실행 시작:', inputText);
 
-    // 먼저 사용자 질문을 즉시 화면에 표시
+    // 인증 토큰 가져오기
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      throw new Error('인증 토큰이 없습니다.');
+    }
+
+    // 1. 먼저 영구 message_id 발급
+
+    const prepareResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        question: inputText,
+        q_mode: 'add',
+        conversation_id: conversationId
+      })
+    });
+
+    if (!prepareResponse.ok) {
+      throw new Error(`Prepare message failed: ${prepareResponse.status}`);
+    }
+
+    const preparedData = await prepareResponse.json();
+    console.log('✅ 추가 질문 영구 메시지 ID 발급 완료:', preparedData);
+
+    // 2. 백엔드에서 생성된 메시지를 프론트엔드에 추가 (UI 표시용)
+    // 중요: 질문과 답변이 하나의 row에 저장되는 구조
+    // - question: 사용자 질문 (즉시 저장)
+    // - ans: AI 답변 (스트리밍 완료 후 업데이트)
+    // - UI에서는 user 메시지에 질문과 답변을 모두 표시
     const userMessage = {
-      id: Date.now() + Math.random() * 1000, // 고유한 ID 보장
+      id: `${preparedData.userMessage.id}-user`,
       conversation_id: conversationId,
       role: 'user',
-      question: inputText,
-      ans: null,
-      created_at: new Date().toISOString()
+      question: inputText,  // 사용자 질문
+      ans: '',  // AI 답변 (아직 없음, 스트리밍 완료 후 업데이트됨)
+      created_at: new Date().toISOString(),
+      backend_id: preparedData.userMessage.id
     };
 
-    // 현재 대화에 사용자 메시지 추가
+    // 현재 대화에 메시지 추가 (UI 표시용)
     context.$store.commit('addMessageToCurrentConversation', userMessage);
 
     // 스트리밍 메시지 초기화
@@ -42,32 +81,35 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     // DOM 업데이트 대기
     await context.$nextTick();
 
-    // 스트리밍 상태 시작
+    // 스트리밍 상태 시작 (메시지가 실제로 시작될 때만)
     context.$store.commit('setIsStreaming', true);
     context.$store.commit('updateStreamingMessage', '');
-    context.streamingVisible = true;
+    context.sse.streamingVisible.value = false; // 초기에는 숨김
 
     // DOM 업데이트 강제 실행
     await context.$nextTick();
     context.$forceUpdate();
 
-    // 인증 토큰 가져오기
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('인증 토큰이 없습니다.');
-    }
+    // token은 이미 위에서 선언됨
 
     // LangGraph 컨텍스트는 수집하지 않음 (추가 질문은 일반 LLM만 사용)
     // 요청 데이터 구성
     const requestData = {
       question: inputText,
       conversation_id: conversationId,
+      message_id: preparedData.userMessage.id, // 영구 메시지 ID 포함
       generate_image: false,
       include_langgraph_context: false,
-      langgraph_context: null
+      langgraph_context: null,
+      q_mode: 'add'  // 추가질문 모드 설정
     };
 
     console.log('📤 추가 질문 요청 데이터:', requestData);
+    console.log('📤 추가 질문 요청 상세:');
+    console.log('  - question:', inputText);
+    console.log('  - conversation_id:', conversationId);
+    console.log('  - q_mode:', 'add');
+    console.log('  - generate_image:', false);
 
     // SSE 요청 전송
     const response = await fetch('http://localhost:8000/api/normal_llm/langgraph/followup/stream', {
@@ -116,6 +158,10 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
             if (messageData.content) {
               assistantResponse += messageData.content;
               context.$store.commit('updateStreamingMessage', assistantResponse);
+              // 첫 번째 콘텐츠가 도착했을 때만 스트리밍 영역 표시
+              if (assistantResponse.length > 0 && !context.sse.streamingVisible.value) {
+                context.sse.streamingVisible.value = true;
+              }
             }
           } catch (parseError) {
             console.warn('📡 추가 질문 SSE 메시지 파싱 오류:', parseError);
@@ -124,15 +170,66 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
       }
     }
 
-    // 스트리밍 완료 후 최종 답변 저장
+    // 스트리밍 완료 후 처리
     if (assistantResponse) {
-      await saveAdditionalQuestionMessage(inputText, assistantResponse, conversationId, context);
-    }
+      console.log('✅ 추가 질문 스트리밍 완료');
+      
+      // 스트리밍 상태 해제
+      context.$store.commit('setIsStreaming', false);
+      context.$store.commit('updateStreamingMessage', '');
+      context.sse.streamingVisible.value = false;
+      
+      // DOM 업데이트 대기
+      await context.$nextTick();
+      
+      // 3. 스트리밍 완료 시 메시지 내용 업데이트 (UI 업데이트용)
+      // 중요: user 메시지의 ans 필드에 AI 답변을 업데이트
+      try {
+        const completeResponse = await fetch(`http://localhost:8000/api/messages/${preparedData.userMessage.id}/complete`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            assistant_response: assistantResponse,  // user 메시지의 ans 필드에 저장됨
+            image_url: null
+          })
+        });
 
-    // 스트리밍 상태 해제
-    context.$store.commit('setIsStreaming', false);
-    context.$store.commit('updateStreamingMessage', '');
-    context.streamingVisible = false;
+        if (completeResponse.ok) {
+          console.log('✅ 추가 질문 메시지 완료 처리 성공');
+          console.log('📊 메시지 완료 처리 상세:');
+          console.log('  - user_message_id:', preparedData.userMessage.id);
+          console.log('  - response_length:', assistantResponse.length);
+          console.log('  - conversation_id:', conversationId);
+          
+          // assistant 역할 메시지로 답변 추가 (왼쪽에 표시)
+          const assistantMessage = {
+            id: Date.now() + Math.random(),
+            conversation_id: conversationId,
+            role: 'assistant',
+            question: null,
+            text: assistantResponse,
+            ans: assistantResponse,
+            created_at: new Date().toISOString(),
+            backend_id: preparedData.userMessage.id  // 사용자 메시지와 동일한 backend_id 설정
+          };
+          
+          context.$store.commit('addMessageToCurrentConversation', assistantMessage);
+          console.log('✅ 프론트엔드 assistant 메시지 추가 완료');
+        } else {
+          console.warn('⚠️ 추가 질문 메시지 완료 처리 실패:', completeResponse.status);
+        }
+      } catch (completeError) {
+        console.warn('⚠️ 추가 질문 메시지 완료 처리 오류:', completeError);
+      }
+    } else {
+      // 답변이 없는 경우에만 스트리밍 상태 해제
+      context.$store.commit('setIsStreaming', false);
+      context.$store.commit('updateStreamingMessage', '');
+      context.sse.streamingVisible.value = false;
+    }
 
     console.log('✅ 추가 질문 처리 완료');
 
@@ -143,113 +240,26 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     const errorMessage = `죄송합니다. 추가 질문 처리 중 오류가 발생했습니다: ${error.message}`;
     
     if (context.$store.state.currentConversation) {
-      const assistantMessage = {
+      const errorUserMessage = {
         id: Date.now() + Math.random(),
         conversation_id: context.$store.state.currentConversation.id,
-        role: 'assistant',
-        question: null,
-        ans: errorMessage,
+        role: 'user',
+        question: inputText,
+        ans: errorMessage,  // 에러 메시지를 ans 필드에 저장
         created_at: new Date().toISOString()
       };
       
-      context.$store.commit('addMessageToCurrentConversation', assistantMessage);
+      context.$store.commit('addMessageToCurrentConversation', errorUserMessage);
     }
     
     // 스트리밍 상태 해제
     context.$store.commit('setIsStreaming', false);
     context.$store.commit('updateStreamingMessage', '');
-    context.streamingVisible = false;
+    context.sse.streamingVisible.value = false;
   }
 }
 
-/**
- * 추가 질문 메시지 저장
- * @param {string} question - 질문
- * @param {string} answer - 답변
- * @param {number|null} conversationId - 대화 ID
- * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
- */
-export async function saveAdditionalQuestionMessage(question, answer, conversationId, context) {
-  try {
-    // 저장 상태 업데이트
-    context.isSavingMessage = true;
-    context.saveStatus = '';
-
-    if (!conversationId) {
-      if (!context.$store.state.currentConversation) {
-        console.error('⚠️ 추가 질문 메시지 저장 실패: 현재 대화가 없습니다.');
-        return;
-      }
-      conversationId = context.$store.state.currentConversation.id;
-    }
-
-    console.log('💾 추가 질문 메시지 저장 시작:', {
-      question: question.substring(0, 50) + '...',
-      answerLength: answer.length,
-      conversationId: conversationId
-    });
-
-    // 인증 토큰 가져오기
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      throw new Error('인증 토큰이 없습니다.');
-    }
-
-    // 요청 데이터 구성
-    const requestData = {
-      question: question,
-      assistant_response: answer,
-      q_mode: 'add', // 추가 질문 모드
-      image_url: null
-    };
-
-    // 백엔드에 메시지 저장 요청
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(requestData)
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('✅ 추가 질문 메시지 저장 완료:', result);
-
-    // 어시스턴트 메시지를 Vuex 스토어에 추가
-    if (result.assistantMessage) {
-      context.$store.commit('addMessageToCurrentConversation', result.assistantMessage);
-    }
-
-    context.saveStatus = 'success';
-
-  } catch (error) {
-    console.error('❌ 추가 질문 메시지 저장 실패:', error);
-    context.saveStatus = 'error';
-    
-    // 에러 메시지를 사용자에게 표시
-    const errorMessage = `메시지 저장 중 오류가 발생했습니다: ${error.message}`;
-    
-    if (context.$store.state.currentConversation) {
-      const assistantMessage = {
-        id: Date.now() + Math.random(),
-        conversation_id: context.$store.state.currentConversation.id,
-        role: 'assistant',
-        question: null,
-        ans: errorMessage,
-        created_at: new Date().toISOString()
-      };
-      
-      context.$store.commit('addMessageToCurrentConversation', assistantMessage);
-    }
-  } finally {
-    context.isSavingMessage = false;
-  }
-}
+// saveAndReplaceAdditionalQuestionMessage 함수는 더 이상 사용하지 않으므로 제거됨
 
 /**
  * LangGraph 컨텍스트 수집 (Judge 함수 사용)
@@ -296,7 +306,6 @@ export async function executeAdditionalQuestionFlowWrapper(inputText, conversati
 
 export default {
   executeAdditionalQuestionFlow,
-  saveAdditionalQuestionMessage,
   getLanggraphContextForAdditionalQuestion,
   executeAdditionalQuestionFlowWrapper
 };
