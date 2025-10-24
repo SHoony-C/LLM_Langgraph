@@ -15,11 +15,11 @@ export async function handleSSEMessage(data, context) {
   // console.log('📡 메시지 결과:', data.result);
   // console.log('📡 현재 단계:', context.currentStep);
 
-  // 추가 질문 중에는 랭그래프 영역 업데이트 방지
-  if (context.langgraph.isFollowupQuestion.value && (data.stage === 'A' || data.stage === 'B' || data.stage === 'C' || data.stage === 'D' || data.stage === 'E')) {
-    // console.log('🔒 추가 질문 중 - 랭그래프 영역 업데이트 방지:', data.stage);
-    return;
-  }
+  // 추가 질문은 별도 처리되므로 이 로직 제거
+  // if (context.langgraph.isFollowupQuestion.value && (data.stage === 'A' || data.stage === 'B' || data.stage === 'C' || data.stage === 'D' || data.stage === 'E')) {
+  //   console.log('🔒 추가 질문 중 - 랭그래프 영역 업데이트 방지:', data.stage);
+  //   return;
+  // }
 
   // DONE 메시지 처리 후 즉시 종료
   if (data.stage === 'DONE') {
@@ -100,41 +100,38 @@ async function handleDoneMessage(data, context) {
       // console.log('🎯 DONE에서 최종 답변 설정:', context.langgraph.finalAnswer.value);
     }
     
-    // 랭그래프 완료 플래그 먼저 설정 (복원 방지) - fetchConversations 호출 전에 설정
-    context.langgraph.isLanggraphJustCompleted.value = true;
+  // 랭그래프 완료 플래그 먼저 설정 (복원 방지)
+  context.langgraph.isLanggraphJustCompleted.value = true;
+  
+  // 최초 질문 완료 후 추가 질문으로 플래그 변경
+  context.langgraph.isFollowupQuestion.value = true;
+  console.log('✅ 최초 질문 완료 - isFollowupQuestion을 true로 설정');
     
-    // 랭그래프 종료 후 최종 답변을 채팅 메시지로 추가 (질문은 이미 langGraphExecutor에서 추가됨)
+    // 랭그래프 종료 후 최종 답변을 user 메시지의 ans 필드에 저장 (assistant 메시지 생성하지 않음)
     const answerToAdd = context.langgraph.finalAnswer.value || context.langgraph.streamingAnswer.value;
     
-    console.log('📝 [DONE] 답변 메시지 추가 시작:', {
+    console.log('📝 [DONE] 답변을 user 메시지의 ans 필드에 저장 시작:', {
       hasAnswer: !!answerToAdd,
+      answerLength: answerToAdd ? answerToAdd.length : 0,
       hasConversation: !!context.$store.state.currentConversation,
       conversationId: context.$store.state.currentConversation?.id,
       currentMessageCount: context.$store.state.currentConversation?.messages?.length
     });
     
     if (answerToAdd && context.$store.state.currentConversation) {
-      console.log('✅ [DONE] 조건 충족 - 답변 메시지 추가 진행');
+      console.log('✅ [DONE] 조건 충족 - user 메시지 ans 필드 업데이트 진행');
       
-      // 사용자 메시지에서 backend_id 가져오기
-      const userMessage = context.$store.state.currentConversation.messages.find(m => m.role === 'user' && m.backend_id);
-      const backendId = userMessage ? userMessage.backend_id : null;
-      
-      // 최종 답변 메시지 추가 (assistant 역할)
-      const assistantMessage = {
-        id: Date.now() + Math.random(), // 고유 ID 생성
-        conversation_id: context.$store.state.currentConversation.id,
-        role: 'assistant',
-        question: null,
-        text: answerToAdd,
-        ans: answerToAdd,
-        created_at: new Date().toISOString(),
-        backend_id: backendId  // 사용자 메시지와 동일한 backend_id 설정
-      };
-    
-    console.log('🤖 [DONE] 답변 메시지 객체:', assistantMessage);
-    context.$store.commit('addMessageToCurrentConversation', assistantMessage);
-    console.log('✅ [DONE] 답변 메시지 추가 완료. 현재 메시지 수:', context.$store.state.currentConversation?.messages?.length);
+      // 현재 대화의 마지막 user 메시지를 찾아서 ans 필드 업데이트
+      const currentConversation = context.$store.state.currentConversation;
+      if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
+        // 마지막 user 메시지 찾기
+        const userMessages = currentConversation.messages.filter(msg => msg.role === 'user');
+        if (userMessages.length > 0) {
+          const lastUserMessage = userMessages[userMessages.length - 1];
+          lastUserMessage.ans = answerToAdd;
+          console.log('✅ [DONE] user 메시지 ans 필드 업데이트 완료:', lastUserMessage.id);
+        }
+      }
     
     // LangGraph 결과를 백엔드에 저장
     try {
@@ -156,29 +153,10 @@ async function handleDoneMessage(data, context) {
       const saveResult = await context.saveLangGraphMessage(messageData);
       console.log('✅ [DONE] LangGraph 메시지 저장 완료:', saveResult);
       
-      // 백엔드에서 생성된 메시지 ID를 프론트엔드 메시지에 설정
-      // 영구 메시지 ID는 이미 사용자 메시지에 설정되어 있으므로, assistant 메시지에도 동일한 ID 설정
-      if (saveResult && saveResult.userMessage && saveResult.userMessage.id) {
-        const currentConversation = context.$store.state.currentConversation;
-        if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
-          const lastMessage = currentConversation.messages[currentConversation.messages.length - 1];
-          if (lastMessage.role === 'assistant' && !lastMessage.backend_id) {
-            // 사용자 메시지에서 backend_id 가져와서 assistant 메시지에도 설정
-            const userMessage = currentConversation.messages.find(m => m.role === 'user' && m.backend_id);
-            if (userMessage && userMessage.backend_id) {
-              lastMessage.backend_id = userMessage.backend_id;
-              console.log('✅ [DONE] SSE 메시지에 backend_id 설정 (사용자 메시지와 동일):', userMessage.backend_id);
-            } else {
-              lastMessage.backend_id = saveResult.userMessage.id;
-              console.log('✅ [DONE] SSE 메시지에 backend_id 설정 (fallback):', saveResult.userMessage.id);
-            }
-          }
-        }
-      }
+      // assistant 메시지를 사용하지 않으므로 backend_id 설정 제거됨
       
-      // 대화 목록 새로고침 - 최신 메시지 반영 (플래그 설정 후 호출)
-      await context.$store.dispatch('fetchConversations');
-      console.log('✅ [DONE] 대화 목록 새로고침 완료');
+      // 대화 목록 새로고침 제거 - UI refresh 방지
+      console.log('✅ [DONE] 대화 목록 새로고침 생략 (UI refresh 방지)');
     } catch (error) {
       console.error('❌ [DONE] LangGraph 메시지 저장 실패:', error);
     }
@@ -199,7 +177,7 @@ async function handleDoneMessage(data, context) {
   // 랭그래프 컨테이너로 스크롤
   context.scrollToLanggraph();
   
-  // 5초 후 플래그 해제 (fetchConversations 완료 후 충분한 시간 확보)
+  // 5초 후 플래그 해제 (UI refresh 방지)
   setTimeout(() => {
     context.langgraph.isLanggraphJustCompleted.value = false;
     console.log('✅ [DONE] 랭그래프 완료 플래그 해제');

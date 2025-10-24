@@ -21,12 +21,8 @@ from app.database import get_db
 from app.models import Conversation, Message, User
 from app.utils.auth import get_current_user
 from app.utils.questionJudge import (
-    judge_question_type,
     get_conversation_langgraph_context,
-    create_llm_context_for_followup,
-    should_use_langgraph,
-    get_processing_endpoint,
-    log_question_processing
+    create_llm_context_for_followup
 )
 from app.routes.llm_class import (
     DirectSimilarityCalculator,
@@ -1350,17 +1346,7 @@ async def execute_langgraph(request: StreamRequest, db: Session = Depends(get_db
         
         print(f"[LangGraph] 🚀 랭그래프 실행 시작: {request.question}")
         
-        # 대화 ID가 있는 경우 질문 유형 확인 (Judge 함수 사용)
-        if request.conversation_id:
-            judgment = judge_question_type(request.conversation_id, db)
-            log_question_processing(request.question, judgment)
-            
-            if not judgment["is_first_question"]:
-                print(f"[LangGraph] ⚠️ 추가 질문 감지됨 - LangGraph 실행 차단")
-                raise HTTPException(
-                    status_code=400, 
-                    detail="추가 질문은 /langgraph/followup 엔드포인트를 사용하세요"
-                )
+        # 프론트엔드에서 질문 유형을 판별하므로 백엔드에서는 판별하지 않음
         
         # 워크플로우 확인
         if langgraph_instance is None:
@@ -1431,14 +1417,7 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
             
             print(f"[SSE] 🚀 LangGraph SSE 스트리밍 시작: {request.question}")
             
-            # 대화 ID가 있는 경우 질문 유형 확인 (Judge 함수 사용)
-            if request.conversation_id:
-                judgment = judge_question_type(request.conversation_id, db)
-                log_question_processing(request.question, judgment, current_user.id if current_user else None)
-                
-                if not judgment["is_first_question"]:
-                    yield f"data: {json.dumps({'error': '추가 질문은 /langgraph/followup 엔드포인트를 사용하세요'})}\n\n"
-                    return
+            # 프론트엔드에서 질문 유형을 판별하므로 백엔드에서는 판별하지 않음
             
             # 워크플로우 확인
             if langgraph_instance is None:

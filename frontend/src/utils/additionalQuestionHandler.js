@@ -86,9 +86,8 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     context.$store.commit('updateStreamingMessage', '');
     context.sse.streamingVisible.value = false; // 초기에는 숨김
 
-    // DOM 업데이트 강제 실행
+    // DOM 업데이트 대기
     await context.$nextTick();
-    context.$forceUpdate();
 
     // token은 이미 위에서 선언됨
 
@@ -110,6 +109,24 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     console.log('  - conversation_id:', conversationId);
     console.log('  - q_mode:', 'add');
     console.log('  - generate_image:', false);
+    
+    // 현재 대화의 메시지 히스토리 확인
+    const currentConversation = context.$store.state.currentConversation;
+    if (currentConversation && currentConversation.messages) {
+      console.log('📋 현재 대화 메시지 히스토리:');
+      console.log('  - 총 메시지 수:', currentConversation.messages.length);
+      currentConversation.messages.forEach((msg, index) => {
+        console.log(`  - 메시지 ${index + 1}:`, {
+          id: msg.id,
+          role: msg.role,
+          question: msg.question ? msg.question.substring(0, 100) + '...' : '없음',
+          ans: msg.ans ? msg.ans.substring(0, 100) + '...' : '없음',
+          created_at: msg.created_at
+        });
+      });
+    } else {
+      console.log('⚠️ 현재 대화 또는 메시지가 없습니다');
+    }
 
     // SSE 요청 전송
     const response = await fetch('http://localhost:8000/api/normal_llm/langgraph/followup/stream', {
@@ -172,12 +189,21 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
 
     // 스트리밍 완료 후 처리
     if (assistantResponse) {
-      console.log('✅ 추가 질문 스트리밍 완료');
+      // console.log('✅ 추가 질문 스트리밍 완료');
+      // console.log('🔍 [DEBUG] 스트리밍 완료 시점 - UI 상태 체크:');
+      // console.log('  - showLanggraph:', context.langgraph.showLanggraph.value);
+      // console.log('  - currentStep:', context.langgraph.currentStep.value);
+      // console.log('  - isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
       
       // 스트리밍 상태 해제
       context.$store.commit('setIsStreaming', false);
       context.$store.commit('updateStreamingMessage', '');
       context.sse.streamingVisible.value = false;
+      
+      // console.log('🔍 [DEBUG] 스트리밍 상태 해제 후:');
+      // console.log('  - isStreaming:', context.$store.state.isStreaming);
+      // console.log('  - streamingMessage:', context.$store.state.streamingMessage);
+      // console.log('  - streamingVisible:', context.sse.streamingVisible.value);
       
       // DOM 업데이트 대기
       await context.$nextTick();
@@ -198,26 +224,30 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
         });
 
         if (completeResponse.ok) {
-          console.log('✅ 추가 질문 메시지 완료 처리 성공');
-          console.log('📊 메시지 완료 처리 상세:');
-          console.log('  - user_message_id:', preparedData.userMessage.id);
-          console.log('  - response_length:', assistantResponse.length);
-          console.log('  - conversation_id:', conversationId);
+          // console.log('✅ 추가 질문 메시지 완료 처리 성공');
+          // console.log('📊 메시지 완료 처리 상세:');
+          // console.log('  - user_message_id:', preparedData.userMessage.id);
+          // console.log('  - response_length:', assistantResponse.length);
+          // console.log('  - conversation_id:', conversationId);
           
-          // assistant 역할 메시지로 답변 추가 (왼쪽에 표시)
-          const assistantMessage = {
-            id: Date.now() + Math.random(),
-            conversation_id: conversationId,
-            role: 'assistant',
-            question: null,
-            text: assistantResponse,
-            ans: assistantResponse,
-            created_at: new Date().toISOString(),
-            backend_id: preparedData.userMessage.id  // 사용자 메시지와 동일한 backend_id 설정
-          };
+          // console.log('🔍 [DEBUG] updateMessageAnswer 호출 전 UI 상태:');
+          // console.log('  - showLanggraph:', context.langgraph.showLanggraph.value);
+          // console.log('  - currentStep:', context.langgraph.currentStep.value);
+          // console.log('  - isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
           
-          context.$store.commit('addMessageToCurrentConversation', assistantMessage);
-          console.log('✅ 프론트엔드 assistant 메시지 추가 완료');
+          // user 메시지의 ans 필드에 답변 저장 (Vue 반응성 시스템 사용)
+          context.$store.commit('updateMessageAnswer', {
+            messageId: preparedData.userMessage.id,
+            answer: assistantResponse
+          });
+          
+          // console.log('🔍 [DEBUG] updateMessageAnswer 호출 후 UI 상태:');
+          // console.log('  - showLanggraph:', context.langgraph.showLanggraph.value);
+          // console.log('  - currentStep:', context.langgraph.currentStep.value);
+          // console.log('  - isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
+          
+          // console.log('✅ [ADDITIONAL] user 메시지 ans 필드 업데이트 완료:', preparedData.userMessage.id);
+          // console.log('✅ 프론트엔드 assistant 메시지 추가 완료');
         } else {
           console.warn('⚠️ 추가 질문 메시지 완료 처리 실패:', completeResponse.status);
         }

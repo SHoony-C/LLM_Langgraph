@@ -388,6 +388,7 @@ const store = createStore({
     return {
       conversations: [],
       currentConversation: null,
+      feedbackUpdateTrigger: 0,
       llamaApiKey: localStorage.getItem('llama_api_key') || '',
       llamaApiBase: localStorage.getItem('llama_api_base') || '',
       llamaApiEndpoint: localStorage.getItem('llama_api_endpoint') || '/llama4/1/llama/aiserving/llama-4/maverick/v1/completions',
@@ -400,7 +401,6 @@ const store = createStore({
       streamingMessage: '',
       shouldScrollToBottom: false,
       conversationRestored: false, // 대화 복원 상태
-      _feedbackUpdateTrigger: 0, // 피드백 업데이트 강제 반응성 트리거
       loginNewConversation: false // 로그인 후 새 대화창 플래그
     }
   },
@@ -484,6 +484,21 @@ const store = createStore({
         state.currentConversation.messages.push(message);
       }
     },
+    updateMessageAnswer(state, { messageId, answer }) {
+      console.log('🔍 [DEBUG] updateMessageAnswer mutation 호출:', { messageId, answerLength: answer?.length });
+      if (state.currentConversation && Array.isArray(state.currentConversation.messages)) {
+        const message = state.currentConversation.messages.find(m => m.id === messageId || m.backend_id === messageId);
+        if (message) {
+          console.log('🔍 [DEBUG] 메시지 찾음, ans 필드 업데이트:', message.id);
+          message.ans = answer;
+          console.log('🔍 [DEBUG] 메시지 업데이트 완료');
+        } else {
+          console.warn('⚠️ updateMessageAnswer: 메시지를 찾을 수 없음:', messageId);
+        }
+      } else {
+        console.warn('⚠️ updateMessageAnswer: currentConversation 또는 messages가 없음');
+      }
+    },
     updateMessageId(state, { tempId, realId, additionalData }) {
       if (state.currentConversation && Array.isArray(state.currentConversation.messages)) {
         const message = state.currentConversation.messages.find(m => m.id === tempId);
@@ -515,65 +530,41 @@ const store = createStore({
       }
     },
     updateFeedback(state, { conversationId, messageId, feedback }) {
-      // 전체 conversations 배열을 완전히 새로 생성
-      const newConversations = state.conversations.map(conversation => {
-        if (conversation.id !== conversationId) {
-          return conversation; // 다른 대화는 그대로 유지
-        }
-        
-        // 해당 대화의 메시지들을 완전히 새로 생성
-        const newMessages = conversation.messages.map(message => {
-          if (message.id !== messageId) {
-            return message; // 다른 메시지는 그대로 유지
-          }
-          
-          // 해당 메시지만 새로운 객체로 생성
-          const updatedMessage = {
-            ...message,
-            feedback: feedback
-          };
-          
-          return updatedMessage;
-        });
-        
-        // 대화 객체도 완전히 새로 생성
-        return {
-          ...conversation,
-          messages: newMessages
-        };
-      });
+      // 현재 대화 찾기
+      const conversation = state.conversations.find(c => c.id === conversationId);
+      if (!conversation) return;
       
-      // 상태 전체를 새로운 배열로 교체
-      state.conversations = newConversations;
+      // 해당 메시지 찾기
+      const messageIndex = conversation.messages.findIndex(m => m.id === messageId);
+      if (messageIndex === -1) return;
       
-      // 현재 대화도 업데이트 (랭그래프 상태 보존)
+      // 메시지 객체를 새로 생성하여 교체 (Vue 반응성 보장)
+      const updatedMessage = {
+        ...conversation.messages[messageIndex],
+        feedback: feedback
+      };
+      
+      // 배열의 해당 인덱스를 새 객체로 교체
+      conversation.messages.splice(messageIndex, 1, updatedMessage);
+      
+      // currentConversation이 같은 대화를 참조하고 있다면 동기화
       if (state.currentConversation && state.currentConversation.id === conversationId) {
-        const updatedCurrentConversation = newConversations.find(c => c.id === conversationId);
-        if (updatedCurrentConversation) {
-          // 기존 랭그래프 상태가 있는 메시지 정보 보존
-          const preservedMessages = state.currentConversation.messages.map(existingMsg => {
-            const updatedMsg = updatedCurrentConversation.messages.find(m => m.id === existingMsg.id);
-            if (updatedMsg) {
-              // 랭그래프 관련 정보 보존
-              return {
-                ...updatedMsg,
-                langgraph_result: existingMsg.langgraph_result || updatedMsg.langgraph_result,
-                keyword: existingMsg.keyword || updatedMsg.keyword,
-                db_contents: existingMsg.db_contents || updatedMsg.db_contents
-              };
-            }
-            return existingMsg;
-          });
-          
-          state.currentConversation = {
-            ...updatedCurrentConversation,
-            messages: preservedMessages
-          };
+        const currentMessageIndex = state.currentConversation.messages.findIndex(m => m.id === messageId);
+        if (currentMessageIndex !== -1) {
+          state.currentConversation.messages.splice(currentMessageIndex, 1, updatedMessage);
         }
       }
       
-      // 반응성 트리거 업데이트 (submitFeedback 액션에서 처리)
-      // state._feedbackUpdateTrigger = Date.now();
+      // 강제 업데이트를 위한 트리거 증가
+      state.feedbackUpdateTrigger = (state.feedbackUpdateTrigger || 0) + 1;
+      
+      console.log('✅ 피드백 상태 업데이트:', {
+        messageId,
+        feedback,
+        trigger: state.feedbackUpdateTrigger,
+        currentConversationId: state.currentConversation?.id,
+        conversationId
+      });
     },
     setApiKeyError(state, error) {
       state.apiKeyError = error;
@@ -650,8 +641,6 @@ const store = createStore({
       localStorage.setItem('auth_token', token);
       localStorage.setItem('user', JSON.stringify(normalizedUser));
       
-      // 상태 업데이트 후 강제 반응성 트리거
-      state._feedbackUpdateTrigger++;
     },
     setUser(state, user) {
       state.user = user;
@@ -659,8 +648,6 @@ const store = createStore({
       localStorage.setItem('user_info', JSON.stringify(user));
       
       // 사용자 정보만 업데이트 (토큰은 setAuth에서 관리)
-      // 상태 업데이트 후 강제 반응성 트리거
-      state._feedbackUpdateTrigger++;
     },
     clearAuth(state) {
       state.token = '';
@@ -702,10 +689,6 @@ const store = createStore({
     },
     setLoginNewConversation(state, value) {
       state.loginNewConversation = value;
-    },
-    incrementFeedbackUpdateTrigger(state) {
-      state._feedbackUpdateTrigger = Date.now();
-      console.log('🔄 피드백 업데이트 트리거 증가:', state._feedbackUpdateTrigger);
     },
   },
   actions: {
@@ -1042,6 +1025,12 @@ const store = createStore({
           feedback: newFeedback
         });
         
+        // currentConversation의 메시지도 직접 업데이트 (즉시 반영)
+        const currentMessage = state.currentConversation.messages.find(m => m.id === messageId);
+        if (currentMessage) {
+          currentMessage.feedback = newFeedback;
+        }
+        
         // 백엔드 API 요청 데이터 로깅
         const requestData = { feedback: newFeedback };
         
@@ -1107,12 +1096,9 @@ const store = createStore({
         }
         
         // 피드백 업데이트 성공 시 UI 트리거 증가 (즉시 반영)
-        commit('incrementFeedbackUpdateTrigger');
-        
         console.log('✅ 피드백 업데이트 완료:', {
           messageId,
-          feedback: newFeedback,
-          triggerValue: state._feedbackUpdateTrigger
+          feedback: newFeedback
         });
         
 
@@ -1175,24 +1161,9 @@ const store = createStore({
           backend_id: preparedData.userMessage.id
         };
         
-        const assistantMessage = {
-          id: `${preparedData.assistantMessage.id}-assistant`,
-          conversation_id: currentConversationId,
-          role: 'assistant',
-          question: '',
-          ans: '', // 아직 답변 없음 (스트리밍 중)
-          created_at: new Date().toISOString(),
-          backend_id: preparedData.assistantMessage.id
-        };
-        
         commit('addMessage', {
           conversationId: currentConversationId,
           message: userMessage
-        });
-        
-        commit('addMessage', {
-          conversationId: currentConversationId,
-          message: assistantMessage
         });
         
         commit('setIsStreaming', true);
@@ -1333,12 +1304,7 @@ const store = createStore({
 
             }
             
-            // Assistant 메시지 ID 업데이트
-            const assistantMessageIndex = conversation.messages.findIndex(m => m.id === assistantMessage.id && m.role === 'assistant');
-            if (assistantMessageIndex !== -1) {
-              conversation.messages[assistantMessageIndex].id = savedData.assistantMessage.id;
-
-            }
+            // Assistant 메시지는 사용하지 않으므로 제거됨
           }
         } else if (saveResponse.status === 401) {
           // 401 에러인 경우 인증 에러 처리
@@ -1350,28 +1316,20 @@ const store = createStore({
             // UI는 이미 업데이트 되었으므로 사용자에게 에러를 표시하지 않음
           }
         
-        return { userMessage, assistantMessage };
+        return { userMessage };
         } catch (streamError) {
           // 스트리밍 오류 발생 시에도 대화는 계속 되도록 처리
           console.error('Streaming error:', streamError);
           
-          // 스트리밍 실패 시 간단한 에러 메시지를 응답으로 추가
-          const errorMessage = {
-            id: Date.now() + 1,
-            conversation_id: currentConversationId,
-            role: 'assistant',
-            question: text,
-            ans: '죄송합니다. 메시지를 처리하는 중 오류가 발생했습니다. 다시 시도해 주세요.',
-
-            created_at: new Date().toISOString()
-          };
+          // 스트리밍 실패 시 user 메시지의 ans 필드에 에러 메시지 추가
+          const userMessages = state.conversations.find(c => c.id === currentConversationId)?.messages?.filter(m => m.role === 'user') || [];
+          if (userMessages.length > 0) {
+            const lastUserMessage = userMessages[userMessages.length - 1];
+            lastUserMessage.ans = '죄송합니다. 메시지를 처리하는 중 오류가 발생했습니다. 다시 시도해 주세요.';
+          }
           
-          commit('addMessage', {
-            conversationId: currentConversationId,
-            message: errorMessage
-          });
           
-          return { userMessage, assistantMessage: errorMessage };
+          return { userMessage };
         }
       } catch (error) {
         console.error('Error in streaming message:', error);

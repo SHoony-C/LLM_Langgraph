@@ -15,11 +15,6 @@ export async function restoreLanggraphFromConversation(conversation, context) {
 
   // 랭그래프 완료 직후에는 복원 스킵 (상태 유지)
   if (context.langgraph.isLanggraphJustCompleted.value) {
-    console.log('✅ 랭그래프 완료 직후 - 복원 스킵하여 상태 유지:', {
-      showLanggraph: context.langgraph.showLanggraph.value,
-      currentStep: context.langgraph.currentStep.value,
-      hasAnswer: !!context.langgraph.finalAnswer.value
-    });
     context.langgraph.isRestoringConversation.value = false;
     // 캐시 업데이트 안 함 - 상태를 완전히 그대로 유지
     return;
@@ -34,14 +29,22 @@ export async function restoreLanggraphFromConversation(conversation, context) {
     return;
   }
 
-  console.log('🔄 대화에서 랭그래프 정보 복원 시작:', conversation.id);
+  // console.log('🔄 대화에서 랭그래프 정보 복원 시작:', conversation.id);
+  // console.log('🔍 [DEBUG] 복원 시작 시점 UI 상태:');
+  // console.log('  - showLanggraph:', context.langgraph.showLanggraph.value);
+  // console.log('  - currentStep:', context.langgraph.currentStep.value);
+  // console.log('  - isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
+  // console.log('  - lastRestoredConversationId:', context.langgraph.lastRestoredConversationId.value);
 
   try {
     // 동일한 대화를 다시 복원하는 경우 (fetchConversations 후) - 상태 유지
     if (context.langgraph.lastRestoredConversationId.value === conversation.id && 
         context.langgraph.showLanggraph.value && 
         context.langgraph.finalAnswer.value) {
-      console.log('✅ 동일한 대화 - 랭그래프 상태 유지 (초기화 스킵)');
+      // console.log('✅ 동일한 대화 - 랭그래프 상태 유지 (초기화 스킵)');
+      // console.log('🔍 [DEBUG] 상태 유지 시점 UI 상태:');
+      // console.log('  - showLanggraph:', context.langgraph.showLanggraph.value);
+      // console.log('  - currentStep:', context.langgraph.currentStep.value);
       context.langgraph.isRestoringConversation.value = false;
       return;
     }
@@ -75,6 +78,10 @@ export async function restoreLanggraphFromConversation(conversation, context) {
       // 랭그래프 영역 숨기기
       context.langgraph.showLanggraph.value = false;
       
+      // 빈 대화는 추가 질문이 아님
+      context.langgraph.isFollowupQuestion.value = false;
+      console.log('✅ 빈 대화 - isFollowupQuestion을 false로 설정');
+      
       context.langgraph.lastRestoredConversationId.value = conversation.id;
       context.langgraph.isRestoringConversation.value = false;
       return;
@@ -83,10 +90,13 @@ export async function restoreLanggraphFromConversation(conversation, context) {
     let langgraphMessage = null;
 
     // LangGraph 정보가 있는 메시지 찾기 (user 메시지 중 q_mode가 'search'이거나 keyword/db_contents가 있는 메시지)
-    for (const message of messages) {
+    // console.log('🔍 LangGraph 메시지 찾기 시작:', messages.length, '개 메시지');
+        
+    for (const message of messages) {      
       // user 메시지만 확인 (백엔드에서 keyword, db_contents는 user 메시지에만 포함됨)
       if (message.role === 'user' && (message.q_mode === 'search' || message.keyword || message.db_contents)) {
         langgraphMessage = message;
+        console.log('✅ LangGraph 메시지 발견:', message.id);
         break;
       }
     }
@@ -108,6 +118,10 @@ export async function restoreLanggraphFromConversation(conversation, context) {
       context.langgraph.showLanggraph.value = true;
       context.langgraph.currentStep.value = 4; // 최종 단계로 설정
       context.langgraph.originalInput.value = langgraphMessage.question || '';
+      
+      // LangGraph 정보가 있으면 추가 질문으로 설정
+      context.langgraph.isFollowupQuestion.value = true;
+      // console.log('✅ LangGraph 정보 존재 - isFollowupQuestion을 true로 설정');
 
       // 키워드 정보 복원 (전체 상태 또는 키워드 배열)
       if (langgraphMessage.keyword) {
@@ -141,13 +155,13 @@ export async function restoreLanggraphFromConversation(conversation, context) {
               context.langgraph.extractedDbSearchTitle.value = keywordData.extractedDbSearchTitle;
               context.langgraph.searchedDocuments.value = keywordData.extractedDbSearchTitle;
             }
-            console.log('✅ 전체 상태 복원 완료 (langGraphState):', {
-              originalInput: context.langgraph.originalInput.value,
-              augmentedKeywords: context.langgraph.augmentedKeywords.value.length,
-              searchResults: context.langgraph.searchResults.value.length,
-              finalAnswer: context.langgraph.finalAnswer.value ? '있음' : '없음',
-              analysisImageUrl: context.langgraph.analysisImageUrl.value ? '있음' : '없음'
-            });
+            // console.log('✅ 전체 상태 복원 완료 (langGraphState):', {
+            //   originalInput: context.langgraph.originalInput.value,
+            //   augmentedKeywords: context.langgraph.augmentedKeywords.value.length,
+            //   searchResults: context.langgraph.searchResults.value.length,
+            //   finalAnswer: context.langgraph.finalAnswer.value ? '있음' : '없음',
+            //   analysisImageUrl: context.langgraph.analysisImageUrl.value ? '있음' : '없음'
+            // });
           } else if (Array.isArray(keywordData)) {
             // 키워드 배열인 경우
             context.langgraph.augmentedKeywords.value = keywordData.map((keyword, index) => ({
@@ -156,7 +170,7 @@ export async function restoreLanggraphFromConversation(conversation, context) {
               category: 'augmented'
             }));
             context.langgraph.extractedKeywords.value = keywordData;
-            console.log('✅ 키워드 복원 완료:', keywordData.length, '개');
+            // console.log('✅ 키워드 복원 완료:', keywordData.length, '개');
           }
         } catch (error) {
           console.warn('키워드 파싱 실패:', error);
@@ -178,10 +192,28 @@ export async function restoreLanggraphFromConversation(conversation, context) {
         }
       }
 
-      // 답변 정보 복원 (keyword에서 복원되지 않은 경우)
-      if (langgraphMessage.ans && !context.langgraph.finalAnswer.value) {
+      // 답변 정보 복원 (user 메시지의 ans 필드에서 복원)
+      console.log('🔍 답변 복원 시작:', {
+        hasAns: !!langgraphMessage.ans,
+        ansLength: langgraphMessage.ans ? langgraphMessage.ans.length : 0,
+        currentFinalAnswer: context.langgraph.finalAnswer.value,
+        currentFinalAnswerLength: context.langgraph.finalAnswer.value ? context.langgraph.finalAnswer.value.length : 0
+      });
+      
+      // user 메시지의 ans 필드에서 답변 복원
+      if (langgraphMessage.ans && langgraphMessage.ans.trim() !== '') {
         context.langgraph.finalAnswer.value = langgraphMessage.ans;
-        console.log('✅ 답변 복원 완료');
+        console.log('✅ 답변 복원 완료 (user 메시지 ans 필드에서):', {
+          messageId: langgraphMessage.id,
+          ansLength: langgraphMessage.ans.length,
+          finalAnswerSet: context.langgraph.finalAnswer.value.length
+        });
+      } else {
+        console.warn('⚠️ user 메시지에 ans가 없습니다:', {
+          messageId: langgraphMessage.id,
+          hasAns: !!langgraphMessage.ans,
+          ansValue: langgraphMessage.ans
+        });
       }
 
       // 이미지 URL 복원 (keyword에서 복원되지 않은 경우)
@@ -190,9 +222,21 @@ export async function restoreLanggraphFromConversation(conversation, context) {
         console.log('✅ 분석 이미지 URL 복원 완료');
       }
 
-      // console.log('✅ 랭그래프 정보 복원 완료');
+      // 최종 복원 상태 로그
+      console.log('✅ 랭그래프 정보 복원 완료:', {
+        showLanggraph: context.langgraph.showLanggraph.value,
+        currentStep: context.langgraph.currentStep.value,
+        hasOriginalInput: !!context.langgraph.originalInput.value,
+        hasFinalAnswer: !!context.langgraph.finalAnswer.value,
+        finalAnswerLength: context.langgraph.finalAnswer.value ? context.langgraph.finalAnswer.value.length : 0,
+        hasAugmentedKeywords: context.langgraph.augmentedKeywords.value.length > 0,
+        hasSearchResults: context.langgraph.searchResults.value.length > 0
+      });
     } else {
       console.log('📭 LangGraph 정보 없음 - 일반 대화로 처리');
+      // LangGraph 정보가 없으면 추가 질문이 아님
+      context.langgraph.isFollowupQuestion.value = false;
+      console.log('✅ LangGraph 정보 없음 - isFollowupQuestion을 false로 설정');
     }
 
     // 복원된 대화 ID 캐시
@@ -255,52 +299,7 @@ export async function findAndRestoreRelatedLangGraph(conversationId, context) {
  * 새로고침 시 대화 복원 (URL 파라미터 기반)
  * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
  */
-export async function restoreCurrentConversationOnRefresh(context) {
-  try {
-    // URL에서 conversation_id 파라미터 확인
-    const urlParams = new URLSearchParams(window.location.search);
-    const conversationId = urlParams.get('conversation_id');
 
-    if (!conversationId) {
-      console.log('URL에 conversation_id 파라미터 없음');
-      return;
-    }
-
-    console.log('🔄 URL 파라미터로 대화 복원 시작:', conversationId);
-
-    // 대화 정보 가져오기
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('대화 정보 로드 완료:', result);
-
-    // Vuex 스토어에 대화 설정
-    context.$store.commit('setCurrentConversation', {
-      id: parseInt(conversationId),
-      messages: result.messages || []
-    });
-
-    // 랭그래프 정보 복원
-    await restoreLanggraphFromConversation({
-      id: parseInt(conversationId),
-      messages: result.messages || []
-    }, context);
-
-    console.log('✅ URL 파라미터로 대화 복원 완료');
-
-  } catch (error) {
-    console.error('❌ URL 파라미터로 대화 복원 실패:', error);
-  }
-}
 
 /**
  * 새로고침 시 현재 대화 복원
@@ -329,7 +328,7 @@ export async function restoreCurrentConversation(context) {
     }
 
     const result = await response.json();
-    console.log('대화 정보 다시 로드 완료:', result);
+    // console.log('대화 정보 다시 로드 완료:', result);
 
     // Vuex 스토어에 대화 업데이트
     context.$store.commit('setCurrentConversation', {
@@ -343,7 +342,7 @@ export async function restoreCurrentConversation(context) {
       messages: result.messages || []
     }, context);
 
-    console.log('✅ 현재 대화 복원 완료');
+    // console.log('✅ 현재 대화 복원 완료');
 
   } catch (error) {
     console.error('❌ 현재 대화 복원 실패:', error);
@@ -370,6 +369,9 @@ export function restoreLanggraphFromCurrentMessages(context) {
     if (messages.length === 0) {
       console.warn('⚠️ 현재 대화 메시지가 비어있습니다.');
       context.langgraph.showLanggraph.value = false;
+      // 빈 메시지는 추가 질문이 아님
+      context.langgraph.isFollowupQuestion.value = false;
+      console.log('✅ 빈 메시지 - isFollowupQuestion을 false로 설정');
       return;
     }
     let langgraphMessage = null;
@@ -388,6 +390,10 @@ export function restoreLanggraphFromCurrentMessages(context) {
       context.langgraph.showLanggraph.value = true;
       context.langgraph.currentStep.value = 4;
       context.langgraph.originalInput.value = langgraphMessage.question || '';
+      
+      // LangGraph 정보가 있으면 추가 질문으로 설정
+      context.langgraph.isFollowupQuestion.value = true;
+      // console.log('✅ LangGraph 정보 존재 - isFollowupQuestion을 true로 설정');
 
       // 키워드 복원 (전체 상태 또는 키워드 배열)
       if (langgraphMessage.keyword) {
@@ -449,9 +455,19 @@ export function restoreLanggraphFromCurrentMessages(context) {
         }
       }
 
-      // 답변 복원 (keyword에서 복원되지 않은 경우)
-      if (langgraphMessage.ans && !context.langgraph.finalAnswer.value) {
+      // 답변 복원 (user 메시지의 ans 필드에서 복원)
+      if (langgraphMessage.ans && langgraphMessage.ans.trim() !== '') {
         context.langgraph.finalAnswer.value = langgraphMessage.ans;
+        console.log('✅ 답변 복원 완료 (user 메시지 ans 필드에서):', {
+          messageId: langgraphMessage.id,
+          ansLength: langgraphMessage.ans.length
+        });
+      } else {
+        console.warn('⚠️ user 메시지에 ans가 없습니다:', {
+          messageId: langgraphMessage.id,
+          hasAns: !!langgraphMessage.ans,
+          ansValue: langgraphMessage.ans
+        });
       }
 
       // 이미지 URL 복원 (keyword에서 복원되지 않은 경우)
@@ -460,6 +476,10 @@ export function restoreLanggraphFromCurrentMessages(context) {
       }
 
       console.log('✅ 랭그래프 상태 복원 완료');
+    } else {
+      // LangGraph 정보가 없으면 추가 질문이 아님
+      context.langgraph.isFollowupQuestion.value = false;
+      console.log('✅ LangGraph 정보 없음 - isFollowupQuestion을 false로 설정');
     }
 
   } catch (error) {
@@ -467,58 +487,11 @@ export function restoreLanggraphFromCurrentMessages(context) {
   }
 }
 
-// 메시지에서 랭그래프 상태 복원
-function restoreLanggraphFromMessages(messages, context) {
-  try {
-    // 랭그래프 결과가 있는 메시지 찾기
-    const langgraphMessage = messages.find(msg => 
-      msg.role === 'assistant' && 
-      msg.langgraph_result && 
-      msg.q_mode === 'search'
-    );
-    
-    if (langgraphMessage && langgraphMessage.langgraph_result) {
-      const result = langgraphMessage.langgraph_result;
-      
-      // 랭그래프 UI 상태 복원
-      context.langgraph.showLanggraph.value = true;
-      context.langgraph.currentStep.value = 4; // 최종 단계
-      context.langgraph.originalInput.value = result.question || '';
-      context.langgraph.finalAnswer.value = result.answer || '';
-      
-      // 검색 결과 복원
-      if (result.documents && Array.isArray(result.documents)) {
-        context.langgraph.searchResults.value = result.documents.map(doc => ({
-          title: doc.title || '제목 없음',
-          content: doc.content || '',
-          source: doc.source || '',
-          score: doc.score || 0
-        }));
-      }
-      
-      // 키워드 복원
-      if (result.keyword) {
-        context.langgraph.extractedKeywords.value = result.keyword;
-      }
-      
-      console.log('✅ 랭그래프 상태 복원 완료:', {
-        step: context.langgraph.currentStep.value,
-        searchResults: context.langgraph.searchResults.value.length,
-        hasKeywords: !!context.langgraph.extractedKeywords.value
-      });
-    } else {
-      console.log('복원할 랭그래프 상태가 없습니다.');
-    }
-  } catch (error) {
-    console.error('랭그래프 상태 복원 오류:', error);
-  }
-}
+// 메시지에서 랭그래프 상태 복원 (assistant 메시지 사용하지 않으므로 제거됨)
 
 export default {
   restoreLanggraphFromConversation,
   findAndRestoreRelatedLangGraph,
-  restoreCurrentConversationOnRefresh,
   restoreCurrentConversation,
-  restoreLanggraphFromCurrentMessages,
-  restoreLanggraphFromMessages
+  restoreLanggraphFromCurrentMessages
 };

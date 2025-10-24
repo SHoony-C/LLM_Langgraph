@@ -630,26 +630,8 @@ export default {
       // 드래그 이벤트 허용
       document.addEventListener('dragstart', allowEvent, { capture: true, passive: false });
       
-      // CSS 스타일로 복사 허용 강제 적용
-      const style = document.createElement('style');
-      style.textContent = `
-        * {
-          -webkit-user-select: text !important;
-          -moz-user-select: text !important;
-          -ms-user-select: text !important;
-          user-select: text !important;
-          -webkit-touch-callout: default !important;
-        }
-        button, .btn, .action-btn, .send-btn, .toggle-sidebar-btn, 
-        .new-chat-btn, .delete-btn, .close-btn {
-          -webkit-user-select: none !important;
-          -moz-user-select: none !important;
-          -ms-user-select: none !important;
-          user-select: none !important;
-        }
-      `;
-      // CSP trusted-types 'none' 설정으로 인해 Trusted Types API 사용하지 않음
-      document.head.appendChild(style);
+      // CSS 클래스로 복사 허용 강제 적용 (TrustedScript 오류 방지)
+      document.body.classList.add('text-selection-enabled');
       
     },
     handleSSOCallback() {

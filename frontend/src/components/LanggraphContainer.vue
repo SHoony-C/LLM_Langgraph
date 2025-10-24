@@ -202,17 +202,6 @@
             <div class="no-image-message">
               <strong>이미지 URL이 설정되지 않았습니다</strong>
               <p>RAG 검색 결과를 기반으로 한 이미지 URL이 생성되지 않았습니다.</p>
-              <div class="image-info">
-                <strong>디버깅 정보:</strong>
-                <ul>
-                  <li>현재 단계: {{ currentStep }}</li>
-                  <li>최종 답변: {{ finalAnswer ? '있음' : '없음' }}</li>
-                </ul>
-                <div v-if="lastImageUrl" class="image-url-debug">
-                  <strong>마지막 시도된 이미지 URL:</strong>
-                  <code class="url-text">{{ lastImageUrl }}</code>
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -302,6 +291,14 @@ export default {
   computed: {
     progressPercentage() {
       return (this.currentStep / 4) * 100;
+    }
+  },
+  watch: {
+    showLanggraph(newVal, oldVal) {
+      console.log('🔍 [DEBUG] LanggraphContainer showLanggraph 변화:', { oldVal, newVal });
+    },
+    currentStep(newVal, oldVal) {
+      console.log('🔍 [DEBUG] LanggraphContainer currentStep 변화:', { oldVal, newVal });
     }
   },
   methods: {

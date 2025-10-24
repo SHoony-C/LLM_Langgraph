@@ -305,15 +305,16 @@ def get_conversation_messages(
             Message.conversation_id == conversation_id
         ).order_by(Message.created_at.asc()).all()
         
-        # 메시지를 user와 assistant로 분리하여 반환
+        # 메시지를 user 메시지로 통합하여 반환 (assistant 메시지 제거)
         result_messages = []
         for message in messages:
-            # User 메시지 추가
+            # User 메시지 추가 (답변도 포함)
             user_message = {
                 "id": f"{message.id}-user",
                 "role": "user",
                 "text": message.question,
                 "question": message.question,
+                "ans": message.ans,  # 답변을 user 메시지에 포함
                 "feedback": message.feedback,
                 "created_at": message.created_at,
                 "user_name": message.user_name,
@@ -325,47 +326,7 @@ def get_conversation_messages(
             }
             result_messages.append(user_message)
             
-            # Assistant 메시지 추가 (답변이 있는 경우에만)
-            if message.ans:
-                # langgraph_result 구성 (keyword와 db_contents 기반)
-                langgraph_result = None
-                if message.keyword or message.db_contents:
-                    try:
-                        import json
-                        langgraph_result = {
-                            "question": message.question,
-                            "answer": message.ans,
-                            "keyword": message.keyword,
-                            "documents": json.loads(message.db_contents) if message.db_contents else [],
-                            "documents_count": len(json.loads(message.db_contents)) if message.db_contents else 0,
-                            "sources": []  # 필요시 추가
-                        }
-                    except (json.JSONDecodeError, TypeError):
-                        langgraph_result = {
-                            "question": message.question,
-                            "answer": message.ans,
-                            "keyword": message.keyword,
-                            "documents": [],
-                            "documents_count": 0,
-                            "sources": []
-                        }
-                
-                assistant_message = {
-                    "id": f"{message.id}-assistant",
-                    "role": "assistant", 
-                    "text": message.ans,
-                    "ans": message.ans,
-                    "question": message.question,
-                    "feedback": message.feedback,
-                    "created_at": message.created_at,
-                    "q_mode": message.q_mode,
-                    "keyword": message.keyword,
-                    "db_contents": message.db_contents,
-                    "image": message.image,
-                    "langgraph_result": langgraph_result,
-                    "backend_id": message.id  # 원본 백엔드 ID 보존
-                }
-                result_messages.append(assistant_message)
+            # Assistant 메시지는 완전히 제거됨 (user 메시지에 답변 포함)
         
         return {
             "conversation_id": conversation_id,

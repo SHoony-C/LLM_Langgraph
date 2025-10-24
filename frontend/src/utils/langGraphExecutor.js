@@ -149,8 +149,14 @@ export async function executeLangGraphWithSSE(inputText, context, permanentMessa
 
     console.log('🚀 SSE 스트리밍 요청 시작:', requestData);
 
+    // 랭그래프는 최초 질문만 처리 (추가 질문은 Home.vue에서 분기 처리)
+    const endpoint = 'http://localhost:8000/api/langgraph/stream';
+    
+    console.log('🎯 랭그래프 엔드포인트:', endpoint);
+    console.log('🎯 isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
+
     // SSE 요청 전송
-    const response = await fetch('http://localhost:8000/api/langgraph/stream', {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -213,6 +219,10 @@ export async function executeLangGraphWithSSE(inputText, context, permanentMessa
     context.langgraph.isSearching.value = false;
     context.langgraph.isGeneratingAnswer.value = false;
     context.langgraph.isStreamingAnswer.value = false;
+    
+    // 최초 질문 완료 후 추가 질문으로 플래그 변경
+    context.langgraph.isFollowupQuestion.value = true;
+    console.log('✅ 최초 질문 완료 (SSE) - isFollowupQuestion을 true로 설정');
   }
 }
 
@@ -235,6 +245,10 @@ export async function fallbackLanggraphFlow(inputText, error, context) {
 
   // 폴백 메시지 저장
   await saveFallbackMessage(inputText, fallbackAnswer, context);
+  
+  // 최초 질문 완료 후 추가 질문으로 플래그 변경 (폴백 케이스도 포함)
+  context.langgraph.isFollowupQuestion.value = true;
+  console.log('✅ 최초 질문 완료 (폴백) - isFollowupQuestion을 true로 설정');
 }
 
 /**
@@ -264,17 +278,8 @@ export async function saveFallbackMessage(question, answer, context) {
 
     context.$store.commit('addMessageToCurrentConversation', userMessage);
 
-    // 어시스턴트 메시지 추가
-    const assistantMessage = {
-      id: Date.now() + Math.random() + 1,
-      conversation_id: conversationId,
-      role: 'assistant',
-      question: null,
-      ans: answer,
-      created_at: new Date().toISOString()
-    };
-
-    context.$store.commit('addMessageToCurrentConversation', assistantMessage);
+    // user 메시지의 ans 필드에 답변 저장
+    userMessage.ans = answer;
 
     console.log('✅ 폴백 메시지 저장 완료');
 
@@ -337,18 +342,21 @@ export async function processDirectLangGraphResult(apiResult, context) {
     await processLangGraphResult(apiResult.result, context);
   }
 
-  // 최종 답변을 채팅 메시지로 추가
+  // 최종 답변을 user 메시지의 ans 필드에 저장 (assistant 메시지 생성하지 않음)
   if (context.langgraph.finalAnswer.value && context.$store.state.currentConversation) {
-    const assistantMessage = {
-      id: Date.now() + Math.random(),
-      conversation_id: context.$store.state.currentConversation.id,
-      role: 'assistant',
-      question: null,
-      ans: context.langgraph.finalAnswer.value,
-      created_at: new Date().toISOString()
-    };
-
-    context.$store.commit('addMessageToCurrentConversation', assistantMessage);
+    console.log('📝 [LANGGRAPH] 답변을 user 메시지의 ans 필드에 저장:', context.langgraph.finalAnswer.value.length, '자');
+    
+    // 현재 대화의 마지막 user 메시지를 찾아서 ans 필드 업데이트
+    const currentConversation = context.$store.state.currentConversation;
+    if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
+      // 마지막 user 메시지 찾기
+      const userMessages = currentConversation.messages.filter(msg => msg.role === 'user');
+      if (userMessages.length > 0) {
+        const lastUserMessage = userMessages[userMessages.length - 1];
+        lastUserMessage.ans = context.langgraph.finalAnswer.value;
+        console.log('✅ [LANGGRAPH] user 메시지 ans 필드 업데이트 완료:', lastUserMessage.id);
+      }
+    }
 
     // LangGraph 결과를 백엔드에 저장
     try {
@@ -363,17 +371,7 @@ export async function processDirectLangGraphResult(apiResult, context) {
       });
       console.log('✅ LangGraph 메시지 저장 완료:', saveResult);
       
-      // 백엔드에서 생성된 메시지 ID를 프론트엔드 메시지에 설정
-      if (saveResult && saveResult.userMessage && saveResult.userMessage.id) {
-        const currentConversation = context.$store.state.currentConversation;
-        if (currentConversation && currentConversation.messages && currentConversation.messages.length > 0) {
-          const lastMessage = currentConversation.messages[currentConversation.messages.length - 1];
-          if (lastMessage.role === 'assistant' && !lastMessage.backend_id) {
-            lastMessage.backend_id = saveResult.userMessage.id;
-            console.log('✅ LangGraph 메시지에 backend_id 설정:', saveResult.userMessage.id);
-          }
-        }
-      }
+      // assistant 메시지를 사용하지 않으므로 backend_id 설정 제거됨
     } catch (error) {
       console.error('❌ LangGraph 메시지 저장 실패:', error);
     }
@@ -384,6 +382,10 @@ export async function processDirectLangGraphResult(apiResult, context) {
   context.langgraph.isSearching.value = false;
   context.langgraph.isGeneratingAnswer.value = false;
   context.langgraph.isStreamingAnswer.value = false;
+  
+  // 최초 질문 완료 후 추가 질문으로 플래그 변경
+  context.langgraph.isFollowupQuestion.value = true;
+  console.log('✅ 최초 질문 완료 - isFollowupQuestion을 true로 설정');
 }
 
 // LangGraph 결과를 메시지로 저장 (기존 함수 - 폴백용)
@@ -512,8 +514,8 @@ async function saveLangGraphMessage(result, context) {
         }
       }
       
-      // 대화 목록 새로고침
-      await context.$store.dispatch('fetchConversations');
+      // 대화 목록 새로고침 제거 - UI refresh 방지
+      console.log('✅ 대화 목록 새로고침 생략 (UI refresh 방지)');
       
     } else {
       console.error('❌ LangGraph 메시지 저장 실패:', response.status, response.statusText);

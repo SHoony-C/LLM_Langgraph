@@ -45,7 +45,6 @@
           :streaming-message="$store.state.streamingMessage"
           :streaming-visible="sse.streamingVisible.value"
           :last-message-height="scroll.lastMessageHeight.value"
-          :feedback-update-trigger="$store.state._feedbackUpdateTrigger"
           @submit-feedback="submitFeedback"
         />
             </div>
@@ -79,9 +78,7 @@ import { useLanggraph } from '@/composables/useLanggraph.js';
 import { useMessages } from '@/composables/useMessages.js';
 import { useSSE } from '@/composables/useSSE.js';
 import { useScroll } from '@/composables/useScroll.js';
-import { 
-  judgeQuestionType
-} from '@/utils/questionJudge.js';
+// judgeQuestionType은 더 이상 사용하지 않음 - isFollowupQuestion 플래그 사용
 import { 
   executeLanggraphFlow
 } from '@/utils/langGraphExecutor.js';
@@ -90,7 +87,7 @@ import {
 } from '@/utils/additionalQuestionHandler.js';
 import {
   restoreLanggraphFromConversation,
-  restoreLanggraphFromCurrentMessages
+  // restoreLanggraphFromCurrentMeages
 } from '@/utils/conversationRestorer.js';
 import {
   saveLangGraphMessage
@@ -169,20 +166,35 @@ export default {
       this.$refs.chatInput.clearInput();
       
       // 질문 타입 판단
-      const currentMessages = this.$store.state.currentConversation?.messages || [];
       const conversationId = this.$store.state.currentConversation?.id || null;
-      const judgment = judgeQuestionType(messageText, conversationId, currentMessages);
-      
+      // isFollowupQuestion 플래그 기반으로 처리
       try {
-        if (judgment.isFirstQuestion) {
-          console.log('🔬 최초 질문 - LangGraph 실행');
-          await executeLanggraphFlow(messageText, this);
-            } else {
-          console.log('💬 추가 질문 - 일반 LLM 실행');
+        if (this.langgraph.isFollowupQuestion.value) {
+          // console.log('💬 추가 질문 - 일반 LLM 실행');
+          // console.log('🔍 [DEBUG] 추가질문 실행 전 UI 상태:');
+          // console.log('  - showLanggraph:', this.langgraph.showLanggraph.value);
+          // console.log('  - currentStep:', this.langgraph.currentStep.value);
+          // console.log('  - isFollowupQuestion:', this.langgraph.isFollowupQuestion.value);
+          
           await executeAdditionalQuestionFlowWrapper(messageText, conversationId, this);
+          
+          // console.log('🔍 [DEBUG] 추가질문 실행 후 UI 상태:');
+          // console.log('  - showLanggraph:', this.langgraph.showLanggraph.value);
+          // console.log('  - currentStep:', this.langgraph.currentStep.value);
+          // console.log('  - isFollowupQuestion:', this.langgraph.isFollowupQuestion.value);
+        } else {
+          // console.log('🔬 최초 질문 - LangGraph 실행');
+          await executeLanggraphFlow(messageText, this);
         }
         
+        // console.log('🔍 [DEBUG] $nextTick 호출 전 UI 상태:');
+        // console.log('  - showLanggraph:', this.langgraph.showLanggraph.value);
+        // console.log('  - currentStep:', this.langgraph.currentStep.value);
+        
         this.$nextTick(() => {
+          // console.log('  - showLanggraph:', this.langgraph.showLanggraph.value);
+          // console.log('  - currentStep:', this.langgraph.currentStep.value);
+          
           this.scroll?.scrollToBottom(this.$refs.chatMessages);
           this.scroll?.safeFocus(this.$refs.chatInput?.$refs?.inputField);
         });
@@ -260,6 +272,10 @@ export default {
       this.isNewConversation = true;
       this.isFirstQuestionInSession = true;
       this.isRestoringConversation = false;
+      
+      // 새 대화는 최초 질문이므로 isFollowupQuestion을 false로 설정
+      this.langgraph.isFollowupQuestion.value = false;
+      console.log('✅ 새 대화 생성 - isFollowupQuestion을 false로 설정');
       
       // 즉시 UI 상태만 초기화 (백엔드는 실제 메시지 전송 시 생성)
       this.userInput = '';
@@ -546,12 +562,6 @@ export default {
         // 스트리밍 완료 후 스크롤 조정
         this.scroll?.scrollToBottom(this.$refs.chatMessages); // 통합된 쓰로틀링 사용
       }
-    },
-    // 피드백 업데이트 트리거 감시
-    '$store.state._feedbackUpdateTrigger'() {
-      console.log('🔄 피드백 업데이트 트리거 감지:', this.$store.state._feedbackUpdateTrigger);
-      // 피드백 변경 후 랭그래프 상태 복원
-      restoreLanggraphFromCurrentMessages(this);
     },
     // 새 대화 생성 트리거 감시
     '$store.state._newConversationTrigger'(newVal, oldVal) {

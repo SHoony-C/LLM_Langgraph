@@ -18,27 +18,28 @@
       <!-- 메시지들 -->
       <div 
         v-for="message in currentMessages" 
-        :key="`msg-${message.id}-${message.role}-${message.feedback || 'none'}-${feedbackUpdateTrigger}`" 
-        :class="['message', message.role]"
+        :key="`msg-${message.id}-${message.role}-${message.feedback || 'none'}`" 
+        class="message-group"
       >
-        <div class="message-content">
-          <div class="message-text" v-if="message.role === 'user'">
-            <!-- 질문 표시 -->
-            <div class="question-text">{{ message.question || '' }}</div>
-            <!-- user 메시지의 ans 필드는 표시하지 않음 - 답변은 assistant 메시지로 분리 -->
-          </div>
-          <div class="message-text" v-else-if="message.role === 'assistant'">
-            <!-- assistant 메시지의 ans 내용 표시 -->
-            <div v-html="formatAnswer(message.ans || '')"></div>
+        <!-- 질문 영역 -->
+        <div v-if="message.role === 'user'" class="message user">
+          <div class="message-content">
+            <div class="message-text">{{ message.question || '' }}</div>
           </div>
         </div>
         
-        <!-- assistant 메시지에만 피드백 버튼 표시 -->
-        <div v-if="message.role === 'assistant'" class="message-actions">
+        <!-- 답변 영역 (질문 아래) - ans 필드가 있는 경우에만 표시 -->
+        <div v-if="message.role === 'user' && message.ans" class="message assistant">
+          <div class="message-content">
+            <div class="message-text" v-html="formatAnswer(message.ans)"></div>
+          </div>
+          <!-- 답변 영역에만 피드백 버튼 표시 -->
+          <div class="message-actions">
           <button 
+            :key="`thumbs-up-${message.id}-${feedbackUpdateTrigger}`"
             class="action-btn thumbs-up" 
             :class="{ 
-              active: getMessageFeedback(message.id) === 'positive',
+              active: messageFeedbackStates[message.id] === 'positive',
               disabled: isStreaming || isMessageStreaming(message.id)
             }"
             @click="!isStreaming && !isMessageStreaming(message.id) && $emit('submitFeedback', message.id, 'positive')"
@@ -50,9 +51,10 @@
             </svg>
           </button>
           <button 
+            :key="`thumbs-down-${message.id}-${feedbackUpdateTrigger}`"
             class="action-btn thumbs-down" 
             :class="{ 
-              active: getMessageFeedback(message.id) === 'negative',
+              active: messageFeedbackStates[message.id] === 'negative',
               disabled: isStreaming || isMessageStreaming(message.id)
             }"
             @click="!isStreaming && !isMessageStreaming(message.id) && $emit('submitFeedback', message.id, 'negative')"
@@ -63,10 +65,11 @@
               <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path>
             </svg>
           </button>
+          </div>
         </div>
       </div>
       
-      <!-- 스트리밍 중인 메시지 표시 -->
+      <!-- 스트리밍 중인 메시지 표시 (답변 영역) -->
       <div 
         v-if="isStreaming && streamingVisible && streamingMessage"
         key="streaming-message"
@@ -108,12 +111,47 @@ export default {
       type: Number,
       default: 0
     },
-    feedbackUpdateTrigger: {
-      type: Number,
-      default: 0
-    }
   },
   emits: ['submitFeedback'],
+  computed: {
+    // 피드백 업데이트 트리거를 감지하여 강제 리렌더링
+    feedbackUpdateTrigger() {
+      return this.$store.state.feedbackUpdateTrigger || 0;
+    },
+    // 각 메시지의 피드백 상태를 computed로 관리
+    messageFeedbackStates() {
+      const states = {};
+      this.currentMessages.forEach(message => {
+        states[message.id] = message.feedback;
+      });
+      return states;
+    }
+  },
+  watch: {
+    // 피드백 상태 변경을 감지하여 강제 업데이트
+    feedbackUpdateTrigger() {
+      console.log('🔄 피드백 트리거 변경 감지:', this.feedbackUpdateTrigger);
+      // 강제 리렌더링을 위해 $forceUpdate 호출
+      this.$forceUpdate();
+    },
+    // 메시지 배열 변경 감지
+    messages: {
+      handler() {
+        console.log('🔄 메시지 배열 변경 감지');
+        // 메시지가 변경되면 강제 업데이트
+        this.$forceUpdate();
+      },
+      deep: true
+    },
+    // currentConversation 변경 감지
+    '$store.state.currentConversation': {
+      handler() {
+        console.log('🔄 currentConversation 변경 감지');
+        this.$forceUpdate();
+      },
+      deep: true
+    }
+  },
   methods: {
     formatAnswer(text) {
       if (!text) return '';
@@ -183,7 +221,12 @@ export default {
     getMessageFeedback(messageId) {
       const message = this.currentMessages.find(m => m.id === messageId);
       const feedback = message ? message.feedback : null;
-      // console.log('🔍 getMessageFeedback:', { messageId, feedback, messageExists: !!message });
+      console.log('🔍 getMessageFeedback:', { 
+        messageId, 
+        feedback, 
+        messageExists: !!message,
+        trigger: this.feedbackUpdateTrigger 
+      });
       return feedback;
     },
     isMessageStreaming(messageId) {
@@ -197,7 +240,7 @@ export default {
       return isIncomplete && this.isStreaming && this.streamingVisible;
     },
     getFeedbackButtonTitle(messageId, feedbackType) {
-      const currentFeedback = this.getMessageFeedback(messageId);
+      const currentFeedback = this.messageFeedbackStates[messageId];
       const isStreaming = this.isStreaming || this.isMessageStreaming(messageId);
       
       if (isStreaming) {

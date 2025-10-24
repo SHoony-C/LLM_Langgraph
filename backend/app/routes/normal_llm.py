@@ -18,9 +18,7 @@ from app.database import get_db
 from app.models import Conversation, Message, User
 from app.utils.auth import get_current_user
 from app.utils.questionJudge import (
-    judge_question_type,
-    get_conversation_langgraph_context,
-    log_question_processing
+    get_conversation_langgraph_context
 )
 from sqlalchemy.orm import Session
 from app.routes.llm_class import (
@@ -147,23 +145,42 @@ def get_conversation_context(conversation_id: int, db: Session) -> dict:
         
         print(f"[CONTEXT] 대화 ID {conversation_id}의 메시지 {len(messages)}개 로드")
         
+        # 메시지 상세 정보 로그
+        print(f"[CONTEXT] 📋 DB에서 로드된 메시지 상세:")
+        for i, msg in enumerate(messages):
+            print(f"[CONTEXT]   - 메시지 {i+1}: ID={msg.id}, role={msg.role}")
+            print(f"[CONTEXT]     질문: {msg.question[:100] if msg.question else 'None'}...")
+            print(f"[CONTEXT]     답변: {msg.ans[:100] if msg.ans else 'None'}...")
+            print(f"[CONTEXT]     키워드: {msg.keyword}")
+            print(f"[CONTEXT]     DB 내용: {bool(msg.db_contents)}")
+        
         # 첫 번째 질문 찾기 (LangGraph 컨텍스트에서)
         first_message = None
         if langgraph_context["first_question"]:
+            print(f"[CONTEXT] 🔍 첫 번째 질문 검색: {langgraph_context['first_question']}")
             # 첫 번째 질문 메시지 찾기
             for msg in messages:
                 if msg.question == langgraph_context["first_question"]:
                     first_message = msg
-                    print(f"[CONTEXT] 첫 번째 질문 발견: 메시지 ID {msg.id}")
+                    print(f"[CONTEXT] ✅ 첫 번째 질문 발견: 메시지 ID {msg.id}")
                     break
+            if not first_message:
+                print(f"[CONTEXT] ⚠️ 첫 번째 질문을 찾을 수 없음")
+        else:
+            print(f"[CONTEXT] ⚠️ LangGraph 컨텍스트에 first_question이 없음")
         
         # 대화 히스토리 구성
         conversation_history = []
+        print(f"[CONTEXT] 🔄 대화 히스토리 구성 시작:")
         for msg in messages:
             if msg.question:
                 conversation_history.append({"role": "user", "content": msg.question})
+                print(f"[CONTEXT]   - 사용자 질문 추가: {msg.question[:50]}...")
             if msg.ans:
                 conversation_history.append({"role": "assistant", "content": msg.ans})
+                print(f"[CONTEXT]   - 어시스턴트 답변 추가: {msg.ans[:50]}...")
+        
+        print(f"[CONTEXT] ✅ 대화 히스토리 구성 완료: {len(conversation_history)}개 메시지")
         
         return {
             "first_message": first_message,
@@ -191,21 +208,37 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
             return Response(content="Error: OpenAI API 키가 설정되지 않았습니다.", media_type="text/plain")
         
         print(f"[FOLLOWUP_STREAM] 🔄 LLM 추가 질문 스트리밍 처리 시작: {request.question}")
+        print(f"[FOLLOWUP_STREAM] 📥 받은 요청 데이터:")
+        print(f"[FOLLOWUP_STREAM]   - question: {request.question}")
+        print(f"[FOLLOWUP_STREAM]   - conversation_id: {request.conversation_id}")
+        print(f"[FOLLOWUP_STREAM]   - message_id: {getattr(request, 'message_id', 'None')}")
+        print(f"[FOLLOWUP_STREAM]   - q_mode: {getattr(request, 'q_mode', 'None')}")
+        print(f"[FOLLOWUP_STREAM]   - include_langgraph_context: {getattr(request, 'include_langgraph_context', 'None')}")
+        print(f"[FOLLOWUP_STREAM]   - langgraph_context: {getattr(request, 'langgraph_context', 'None')}")
         
         # 대화 ID 확인
         if not request.conversation_id:
             return Response(content="Error: 추가 질문은 conversation_id가 필요합니다", media_type="text/plain")
         
-        # Judge 함수를 사용하여 질문 유형 확인
-        judgment = judge_question_type(request.conversation_id, db)
-        log_question_processing(request.question, judgment, current_user.id if current_user else None)
-        
-        if judgment["is_first_question"]:
-            print(f"[FOLLOWUP_STREAM] ⚠️ 최초 질문이 추가 질문 엔드포인트로 전달됨")
-            return Response(content="Error: 최초 질문은 /langgraph/stream 엔드포인트를 사용하세요", media_type="text/plain")
+        # 프론트엔드에서 질문 유형을 판별하므로 백엔드에서는 판별하지 않음
+        print(f"[FOLLOWUP_STREAM] 추가 질문 처리 시작: {request.question}")
         
         # 기존 대화 컨텍스트에서 RAG 정보 추출 (Judge 함수 사용)
         context = get_conversation_context(request.conversation_id, db)
+        
+        print(f"[FOLLOWUP_STREAM] 📊 컨텍스트 정보:")
+        print(f"[FOLLOWUP_STREAM]   - first_message 존재: {context['first_message'] is not None}")
+        print(f"[FOLLOWUP_STREAM]   - conversation_history 개수: {len(context['conversation_history'])}")
+        print(f"[FOLLOWUP_STREAM]   - message_count: {context['message_count']}")
+        print(f"[FOLLOWUP_STREAM]   - langgraph_context 존재: {bool(context['langgraph_context'])}")
+        
+        if context['first_message']:
+            print(f"[FOLLOWUP_STREAM] 📄 첫 번째 메시지 정보:")
+            print(f"[FOLLOWUP_STREAM]   - ID: {context['first_message'].id}")
+            print(f"[FOLLOWUP_STREAM]   - 질문: {context['first_message'].question}")
+            print(f"[FOLLOWUP_STREAM]   - 답변 길이: {len(context['first_message'].ans) if context['first_message'].ans else 0}")
+            print(f"[FOLLOWUP_STREAM]   - 키워드: {context['first_message'].keyword}")
+            print(f"[FOLLOWUP_STREAM]   - DB 내용 존재: {bool(context['first_message'].db_contents)}")
         
         if not context["first_message"]:
             print(f"[FOLLOWUP_STREAM] ⚠️ 첫 번째 질문 없음")
@@ -230,26 +263,66 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
                 # JSON 파싱
                 db_contents_list = json.loads(first_message.db_contents) if isinstance(first_message.db_contents, str) else first_message.db_contents
                 
+                print(f"[FOLLOWUP_STREAM] 🔍 DB 내용 파싱 결과:")
+                print(f"[FOLLOWUP_STREAM]   - 문서 개수: {len(db_contents_list) if db_contents_list else 0}")
+                
                 if db_contents_list and len(db_contents_list) > 0:
-                    # 첫 번째 문서 사용
-                    top_doc = db_contents_list[0]
-                    document_title = top_doc.get('document_name', '검색된 문서')
+                    # 상위 3개 문서 사용하여 내용 구성
+                    document_parts = []
+                    for i, doc in enumerate(db_contents_list[:3]):  # 상위 3개만
+                        # 문서 정보 디버깅
+                        print(f"[FOLLOWUP_STREAM] 🔍 문서 {i+1} 원본 데이터:")
+                        print(f"[FOLLOWUP_STREAM]   - doc: {doc}")
+                        
+                        # 실제 데이터 구조에 맞게 필드 추출
+                        # document_name은 res_payload 최상위에, 나머지는 vector 안에 있음
+                        res_payload = doc.get('res_payload', {})
+                        vector = res_payload.get('vector', {})
+                        
+                        print(f"[FOLLOWUP_STREAM]   - res_payload: {res_payload}")
+                        print(f"[FOLLOWUP_STREAM]   - vector: {vector}")
+                        print(f"[FOLLOWUP_STREAM]   - document_name (res_payload): {res_payload.get('document_name')}")
+                        print(f"[FOLLOWUP_STREAM]   - text (vector): {vector.get('text')}")
+                        print(f"[FOLLOWUP_STREAM]   - summary_result (vector): {vector.get('summary_result')}")
+                        print(f"[FOLLOWUP_STREAM]   - summary_purpose (vector): {vector.get('summary_purpose')}")
+                        print(f"[FOLLOWUP_STREAM]   - summary_fb (vector): {vector.get('summary_fb')}")
+                        
+                        # document_name은 res_payload에서, 나머지는 vector에서 가져오기
+                        doc_name = res_payload.get('document_name', f'문서{i+1}')
+                        doc_content = ""
+                        
+                        # text 필드를 우선 사용, 없으면 summary_result 확인
+                        if vector.get('text'):
+                            doc_content = vector['text']
+                        elif vector.get('summary_result'):
+                            doc_content = vector['summary_result']
+                        elif vector.get('summary_purpose'):
+                            doc_content = vector['summary_purpose']
+                        elif vector.get('summary_fb'):
+                            doc_content = vector['summary_fb']
+                        
+                        if doc_content:
+                            document_parts.append(f"[{doc_name}] {doc_content}")
+                            print(f"[FOLLOWUP_STREAM]   - 문서 {i+1}: {doc_name} - {doc_content[:50]}...")
+                        else:
+                            print(f"[FOLLOWUP_STREAM]   - 문서 {i+1}: {doc_name} - 내용 없음")
                     
-                    # 모든 텍스트 필드 결합
-                    text_parts = []
-                    for field in ['text', 'summary_purpose', 'summary_result', 'summary_fb']:
-                        if top_doc.get(field):
-                            text_parts.append(top_doc[field])
-                    
-                    actual_document_content = " ".join(text_parts).strip() or "문서 내용 없음"
-                    print(f"[FOLLOWUP_STREAM] DB에서 문서 내용 복원 성공: {document_title}")
+                    if document_parts:
+                        document_title = f"검색된 문서 ({len(db_contents_list)}개)"
+                        actual_document_content = "\n".join(document_parts)
+                        print(f"[FOLLOWUP_STREAM] ✅ DB에서 문서 내용 복원 성공: {len(document_parts)}개 문서")
+                    else:
+                        actual_document_content = "문서 내용이 모두 비어있습니다"
+                        print(f"[FOLLOWUP_STREAM] ⚠️ 모든 문서의 내용이 비어있음")
                 else:
                     actual_document_content = "저장된 문서 내용이 없습니다"
+                    print(f"[FOLLOWUP_STREAM] ⚠️ DB 내용이 비어있음")
             else:
                 actual_document_content = "저장된 검색 결과가 없습니다"
+                print(f"[FOLLOWUP_STREAM] ⚠️ db_contents가 None")
                 
         except Exception as e:
-            print(f"[FOLLOWUP_STREAM] DB 내용 파싱 오류: {e}")
+            print(f"[FOLLOWUP_STREAM] ❌ DB 내용 파싱 오류: {e}")
             import traceback
             print(f"[FOLLOWUP_STREAM] 오류 상세: {traceback.format_exc()}")
             actual_document_content = "문서 내용을 가져올 수 없습니다"
@@ -268,6 +341,11 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
         # 대화 히스토리 구성 (첫 번째 질문과 답변만 포함)
         conversation_history = context["conversation_history"]
         print(f"[FOLLOWUP_STREAM] 💬 대화 히스토리: {len(conversation_history)}개 메시지")
+        
+        # 대화 히스토리 상세 로그
+        print(f"[FOLLOWUP_STREAM] 📋 대화 히스토리 상세:")
+        for i, msg in enumerate(conversation_history):
+            print(f"[FOLLOWUP_STREAM]   - 메시지 {i+1}: {msg['role']} - {msg['content'][:100]}...")
         
         # 시스템 프롬프트 구성 (RAG 문서 기반)
         system_prompt = f"""당신은 도움이 되는 AI 어시스턴트입니다.
@@ -295,6 +373,17 @@ async def execute_followup_question_stream(request: StreamRequest, http_request:
         print(f"[FOLLOWUP_STREAM] 📤 LLM에 전송할 메시지 수: {len(messages)}")
         print(f"[FOLLOWUP_STREAM] 📝 현재 질문: {request.question}")
         print(f"[FOLLOWUP_STREAM] 👤 사용자: {current_user.username if current_user else 'None'}")
+        
+        # LLM에 전송할 최종 메시지 상세 로그
+        print(f"[FOLLOWUP_STREAM] 📋 LLM에 전송할 최종 메시지 상세:")
+        for i, msg in enumerate(messages):
+            print(f"[FOLLOWUP_STREAM]   - 메시지 {i+1} ({msg['role']}):")
+            content = msg['content']
+            if len(content) > 200:
+                print(f"[FOLLOWUP_STREAM]     내용: {content[:200]}...")
+            else:
+                print(f"[FOLLOWUP_STREAM]     내용: {content}")
+            print(f"[FOLLOWUP_STREAM]     길이: {len(content)}자")
         
         # 스트리밍 방식 사용 - DB 저장 포함
         return StreamingResponse(
