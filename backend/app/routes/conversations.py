@@ -186,7 +186,7 @@ async def create_message(
     print(f"[MESSAGE] 📋 새 메시지: q_mode={message_request.q_mode}, skip_llm={message_request.skip_llm}")
     
     # user_name 검증 및 설정
-    user_name = current_user.loginid or current_user.username
+    user_name = current_user.username or current_user.loginid
     if not user_name:
         print(f"[ERROR] user_name이 없음. current_user: {current_user}")
         raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")
@@ -505,7 +505,7 @@ def prepare_message(
         raise HTTPException(status_code=404, detail="Conversation not found")
     
     # user_name 검증 및 설정
-    user_name = current_user.loginid or current_user.username
+    user_name = current_user.username or current_user.loginid
     if not user_name:
         print(f"[ERROR] prepare user_name이 없음. current_user: {current_user}")
         raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")
@@ -587,7 +587,7 @@ def save_stream_message(
         raise HTTPException(status_code=404, detail="Conversation not found")
     
     # user_name 검증 및 설정
-    user_name = current_user.loginid or current_user.username
+    user_name = current_user.username or current_user.loginid
     if not user_name:
         print(f"[ERROR] stream user_name이 없음. current_user: {current_user}")
         raise HTTPException(status_code=400, detail="사용자 정보가 유효하지 않습니다")

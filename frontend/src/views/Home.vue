@@ -236,6 +236,12 @@ export default {
       this.isPopupChanging = true;  // 팝업 상태 변경 중 플래그 설정
       this.selectedSearchResult = result;
       this.showSearchResultPopup = true;
+      console.log('🖼️ [POPUP] 이미지 URL 디버깅', {
+        vectorImage: result?.res_payload?.vector?.image_url,
+        payloadImage: result?.res_payload?.image_url,
+        directImage: result?.image_url,
+        analysisImage: result?.analysis_image_url
+      });
       // console.log('🔍 검색 결과 팝업 열기:', result.title);
       // 팝업 열기 완료 후 플래그 해제
       this.$nextTick(() => {
