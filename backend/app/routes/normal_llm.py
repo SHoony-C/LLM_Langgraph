@@ -444,10 +444,10 @@ async def save_message_to_db(stream_request: StreamRequest, assistant_response: 
         # 사용자 정보 확인 (current_user 우선, 없으면 conversation.user)
         user_name = "system"  # 기본값
         if current_user:
-            user_name = current_user.loginid or current_user.username or "system"
+            user_name = current_user.username or current_user.loginid or "system"
             print(f"[DB_SAVE] - current_user에서 사용자명 가져옴: {user_name}")
         elif conversation.user:
-            user_name = conversation.user.loginid or conversation.user.username or "system"
+            user_name = conversation.user.username or conversation.user.loginid or "system"
             print(f"[DB_SAVE] - conversation.user에서 사용자명 가져옴: {user_name}")
         
         # 중복 저장 방지 - 동일한 질문의 최근 메시지 확인 (30초 이내)

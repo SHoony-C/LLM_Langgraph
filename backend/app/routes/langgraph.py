@@ -1284,7 +1284,7 @@ async def save_langgraph_result_to_db_stream(question: str, result: dict, db: Se
         # 사용자 정보 가져오기
         from app.models import User
         user = db.query(User).filter(User.id == user_id).first()
-        user_name = user.loginid if user and user.loginid else (user.username if user else "system")
+        user_name = user.username if user and user.username else (user.loginid if user else "system")
         
         print(f"[DB_SAVE_STREAM] - 사용자명: {user_name}")
         
