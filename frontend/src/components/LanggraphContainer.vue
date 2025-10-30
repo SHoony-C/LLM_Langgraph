@@ -93,7 +93,15 @@
                     <div class="result-title">{{ result.res_payload?.document_name || result.title || '제목 없음' }}</div>
                     <div class="result-summary">{{ result.res_payload?.vector?.summary_result || result.summary || '요약 없음' }}</div>
                     <div class="result-text">{{ result.res_payload?.vector?.text || result.text || '내용 없음' }}</div>
-                    <div v-if="result.res_payload?.vector?.image_url || result.image_url" class="result-image-indicator">
+                    <div
+                      v-if="
+                        result.res_payload?.vector?.image_url ||
+                        result.res_payload?.image_url ||
+                        result.image_url ||
+                        result.analysis_image_url
+                      "
+                      class="result-image-indicator"
+                    >
                       🖼️ 이미지 포함 (클릭하여 보기)
                     </div>
                   </div>
@@ -179,22 +187,14 @@
               </div>
               <!-- 이미지가 정상이면 표시 (GET 요청 없음) -->
               <div v-else class="image-wrapper">
-                <div class="image-placeholder">
-                  <div class="placeholder-icon">🖼️</div>
-                  <div class="placeholder-text">
-                    <strong>분석 이미지 생성됨</strong>
-                    <p>이미지 URL: {{ analysisImageUrl }}</p>
-                    <button @click="$emit('openImageInNewTab', analysisImageUrl)" class="view-image-btn">
-                      새 탭에서 이미지 보기
-                    </button>
-                  </div>
-                </div>
+                <img
+                  :src="analysisImageUrl"
+                  alt="분석 이미지"
+                  class="analysis-image"
+                  @click="$emit('openImageInNewTab', analysisImageUrl)"
+                />
               </div>
-              <div class="image-caption">
-                <strong>랭그래프 4단계 분석 결과</strong><br>
-                • RAG 검색 기반 분석 이미지<br>
-                • 클릭하면 새 탭에서 확대 보기
-              </div>
+
             </div>
           </div>
           <div v-else-if="currentStep >= 4 && !analysisImageUrl" class="no-image-results">

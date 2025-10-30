@@ -71,7 +71,7 @@
       
       <!-- 스트리밍 중인 메시지 표시 (답변 영역) -->
       <div 
-        v-if="isStreaming && streamingVisible && streamingMessage"
+        v-if="isStreaming && streamingVisible "
         key="streaming-message"
         class="message assistant streaming"
         :style="{
@@ -80,7 +80,9 @@
         }"
       >
         <div class="message-content" ref="streamingContent">
-          <div class="message-text" ref="streamingText">{{ streamingMessage }}<span class="cursor">|</span></div>
+          <div class="message-text" ref="streamingText">
+            {{ streamingMessage }}<span class="cursor">|</span>
+          </div>
         </div>
       </div>
     </div>
@@ -128,6 +130,12 @@ export default {
     }
   },
   watch: {
+    isStreaming(newValue) {
+      console.log('🔄 스트리밍 상태 변경:', newValue);
+    },
+    streamingVisible(newValue) {
+      console.log('🔄 스트리밍 영역 표시 상태 변경:', newValue);
+    },
     // 피드백 상태 변경을 감지하여 강제 업데이트
     feedbackUpdateTrigger() {
       console.log('🔄 피드백 트리거 변경 감지:', this.feedbackUpdateTrigger);
