@@ -1,3 +1,10 @@
+# 기타 메모
+npm -v
+10.5.2
+
+
+
+
 # To Do List(문제)
 - 📡 SSE 메시지 파싱 오류: SyntaxError: Unterminated string in JSON at position 1137 (line 1 column 1138)
 - image 저장도 조회도 안돼
