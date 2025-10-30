@@ -129,7 +129,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     }
 
     // SSE 요청 전송
-    const response = await fetch('http://localhost:8000/api/normal_llm/langgraph/followup/stream', {
+    const response = await fetch('https://report-collection/api/normal_llm/followup/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
