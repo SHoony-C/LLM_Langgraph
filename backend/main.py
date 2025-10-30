@@ -14,8 +14,8 @@ app = FastAPI(
     title="LLM-mini API",
     version="1.0.0",
     openapi_url="/api/openapi.json",  # ★ 핵심: /api로 고정
-    redoc_url="/redoc",
-    swagger_ui_parameters={"docExpansion": "full"}
+    # redoc_url="/redoc",
+    # swagger_ui_parameters={"docExpansion": "full"}
     )
 
 # Configure CORS

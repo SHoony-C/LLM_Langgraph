@@ -166,7 +166,7 @@ export async function saveLangGraphMessage(result, context) {
     });
     
     // 메시지 생성 API 호출
-    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -196,7 +196,7 @@ export async function saveLangGraphMessage(result, context) {
         const conversationTitle = question.length > 50 ? question.substring(0, 50) + '...' : question;
         
         try {
-          const titleUpdateResponse = await fetch(`https://report-collection/api/conversations/${conversationId}`, {
+          const titleUpdateResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
             method: 'PUT',
             headers: { 
               'Content-Type': 'application/json',

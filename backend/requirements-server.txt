@@ -66,7 +66,7 @@ networkx==3.4.2
 numpy==1.24.3
 oauthlib==3.3.1
 onnxruntime==1.23.1
-openai @ file:///D:/%EC%84%A4%EC%B9%98%ED%8C%8C%EC%9D%BC/openai-1.0.0-py3-none-any.whl
+openai==1.0.0
 opentelemetry-api==1.37.0
 opentelemetry-exporter-otlp-proto-common==1.37.0
 opentelemetry-exporter-otlp-proto-grpc==1.37.0
@@ -123,7 +123,6 @@ tenacity==8.5.0
 tiktoken==0.12.0
 tokenizers==0.19.1
 tomli==2.3.0
-torch==2.3.1+cpu
 tqdm==4.67.1
 transformers==4.44.0
 typer==0.19.2

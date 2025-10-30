@@ -36,7 +36,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
 
     // 1. 먼저 영구 message_id 발급
 
-    const prepareResponse = await fetch(`https://report-collection/api/conversations/${conversationId}/messages/prepare`, {
+    const prepareResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -131,7 +131,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     }
 
     // 스트림 요청 전송
-    const response = await fetch('https://report-collection/api/normal_llm/followup/stream', {
+    const response = await fetch('http://localhost:8000/api/normal_llm/followup/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -270,7 +270,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
       // 3. 스트리밍 완료 시 메시지 내용 업데이트 (UI 업데이트용)
       // 중요: user 메시지의 ans 필드에 AI 답변을 업데이트
       try {
-        const completeResponse = await fetch(`https://report-collection/api/messages/${preparedData.userMessage.id}/complete`, {
+        const completeResponse = await fetch(`http://localhost:8000/api/messages/${preparedData.userMessage.id}/complete`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',

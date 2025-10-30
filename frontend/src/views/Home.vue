@@ -327,7 +327,7 @@ export default {
         // console.log('🔄 토큰 갱신 시작...');
         
         // 현재 토큰으로 갱신 시도
-        const response = await fetch('https://report-collection/api/auth/refresh', {
+        const response = await fetch('http://localhost:8000/api/auth/refresh', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -480,7 +480,7 @@ export default {
             console.log('🔄 메시지 없음 - API로 메시지 가져오기:', newConversation.id);
             setTimeout(async () => {
               try {
-                const response = await fetch(`https://report-collection/api/conversations/${newConversation.id}/messages`, {
+                const response = await fetch(`http://localhost:8000/api/conversations/${newConversation.id}/messages`, {
                   method: 'GET',
                   headers: {
                     'Authorization': `Bearer ${localStorage.getItem('access_token')}`,

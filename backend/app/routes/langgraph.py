@@ -528,7 +528,7 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             
             # 비동기 호출
             response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="gpt-3.5-turbo",
                 messages=messages,
                 stream=True,
             )
@@ -942,7 +942,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
                     
                     # 실시간 스트리밍 응답 처리
                     response = await client.chat.completions.create(
-                        model="openai/gpt-oss-120b",
+                        model="gpt-3.5-turbo",
                         messages=messages,
                         stream=True,
                     )

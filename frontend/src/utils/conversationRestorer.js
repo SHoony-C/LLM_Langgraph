@@ -258,7 +258,7 @@ export async function findAndRestoreRelatedLangGraph(conversationId, context) {
   console.log('관련 대화 찾기 시작:', conversationId);
 
   try {
-    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/related`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/related`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -316,7 +316,7 @@ export async function restoreCurrentConversation(context) {
     console.log('🔄 현재 대화 복원 시작:', currentConversation.id);
 
     // 대화 정보 다시 가져오기
-    const response = await fetch(`https://report-collection/api/conversations/${currentConversation.id}/messages`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${currentConversation.id}/messages`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('access_token')}`

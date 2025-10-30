@@ -91,7 +91,7 @@ async function prepareMessageForLangGraph(inputText, context) {
 
     console.log('📋 prepare_message API 호출:', requestData);
 
-    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages/prepare`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -150,7 +150,7 @@ export async function executeLangGraphWithSSE(inputText, context, permanentMessa
     console.log('🚀 SSE 스트리밍 요청 시작:', requestData);
 
     // 랭그래프는 최초 질문만 처리 (추가 질문은 Home.vue에서 분기 처리)
-    const endpoint = 'https://report-collection/api/langgraph/stream';
+    const endpoint = 'http://localhost:8000/api/langgraph/stream';
     
     console.log('🎯 랭그래프 엔드포인트:', endpoint);
     console.log('🎯 isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
@@ -514,7 +514,7 @@ async function saveLangGraphMessage(result, context) {
     console.log('🖼️ [FRONTEND IMAGE 전송] 최종 requestBody.image 값:', requestBody.image);
     console.log('📤 [FRONTEND IMAGE 전송] 요청 본문 전체:', JSON.stringify(requestBody, null, 2));
     
-    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -533,7 +533,7 @@ async function saveLangGraphMessage(result, context) {
         const conversationTitle = question.length > 50 ? question.substring(0, 50) + '...' : question;
         
         try {
-          const titleUpdateResponse = await fetch(`https://report-collection/api/conversations/${conversationId}`, {
+          const titleUpdateResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
             method: 'PUT',
             headers: { 
               'Content-Type': 'application/json',
@@ -586,7 +586,7 @@ async function saveLangGraphMessageToBackend(question, answer, conversationId, c
       assistant_response: answer
     };
             
-    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

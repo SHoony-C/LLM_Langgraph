@@ -562,7 +562,7 @@ async def get_streaming_response_with_db_save(messages: List[Dict], request: Req
             
         # 비동기 호출
         response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="gpt-3.5-turbo",
                 messages=messages,
                 stream=True,
             )
@@ -712,7 +712,7 @@ async def get_streaming_response_async(messages: List[Dict], request: Request, g
             
         # 비동기 호출
         response = await client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="gpt-3.5-turbo",
                 messages=messages,
                 stream=True,
             )
