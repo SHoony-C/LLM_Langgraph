@@ -6,7 +6,7 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(5px);
+  backdrop-filter: var(--glass-blur-light);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -16,8 +16,8 @@
 
 .modal-container {
   background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--glass-blur-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
   border-radius: 20px;
   width: 450px;
   max-width: 90%;
@@ -113,7 +113,7 @@
   font-size: 0.95rem;
   color: var(--text-color);
   background: var(--glass-bg);
-  backdrop-filter: blur(10px);
+  backdrop-filter: var(--glass-blur-medium);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -220,4 +220,24 @@
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+/* Edge 전용 성능 최적화 */
+html.edge-performance .modal-overlay,
+html.edge-performance .modal-container,
+html.edge-performance .modal-header,
+html.edge-performance .modal-body,
+html.edge-performance .modal-footer,
+html.edge-performance .modal-container::before,
+html.edge-performance .modal-container::after,
+html.edge-performance .close-btn,
+html.edge-performance .cancel-btn,
+html.edge-performance .save-btn,
+html.edge-performance .close-btn::before,
+html.edge-performance .cancel-btn::before,
+html.edge-performance .save-btn::before {
+  animation: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  transition: none !important;
 }

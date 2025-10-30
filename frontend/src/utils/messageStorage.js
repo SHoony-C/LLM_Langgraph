@@ -116,7 +116,8 @@ export async function saveLangGraphMessage(result, context) {
         let image_url_value = '';
         const payloadImage = extractImageUrl(payload.image_url);
         const vectorImage = extractImageUrl(vector_data.image_url);
-        image_url_value = payloadImage || vectorImage;
+        const directImage = extractImageUrl(candidate.image_url);
+        image_url_value = payloadImage || vectorImage || directImage;
 
         if (image_url_value) {
           console.log('🖼️ [SAVE] 문서 이미지 추출:', {

@@ -8,6 +8,39 @@
  * @param {Object} conversation - 대화 객체
  * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
  */
+function normalizeAugmentedKeywords(rawKeywords, context) {
+  if (!rawKeywords) {
+    return [];
+  }
+
+  const categorize = context?.langgraph?.categorizeKeyword;
+
+  return rawKeywords
+    .map((keyword, index) => {
+      if (!keyword) {
+        return null;
+      }
+
+      const isObject = typeof keyword === 'object' && !Array.isArray(keyword);
+      const text = isObject ? (keyword.text || keyword.keyword || '') : String(keyword);
+
+      if (!text) {
+        return null;
+      }
+
+      const category = (isObject && keyword.category)
+        ? keyword.category
+        : (typeof categorize === 'function' ? categorize(text, index) : '핵심');
+
+      return {
+        id: isObject && keyword.id ? keyword.id : `keyword-${index}`,
+        text,
+        category
+      };
+    })
+    .filter(Boolean);
+}
+
 export async function restoreLanggraphFromConversation(conversation, context) {
   // 대화 복원 상태 설정
   context.langgraph.isRestoringConversation.value = true;
@@ -137,7 +170,11 @@ export async function restoreLanggraphFromConversation(conversation, context) {
               context.langgraph.originalInput.value = keywordData.originalInput;
             }
             if (keywordData.augmentedKeywords) {
-              context.langgraph.augmentedKeywords.value = keywordData.augmentedKeywords;
+              const normalizedKeywords = normalizeAugmentedKeywords(keywordData.augmentedKeywords, context);
+              context.langgraph.augmentedKeywords.value = normalizedKeywords;
+              if (!context.langgraph.extractedKeywords.value && normalizedKeywords.length > 0) {
+                context.langgraph.extractedKeywords.value = normalizedKeywords.map(keyword => keyword.text);
+              }
             }
             if (keywordData.searchResults) {
               context.langgraph.searchResults.value = keywordData.searchResults;
@@ -164,12 +201,9 @@ export async function restoreLanggraphFromConversation(conversation, context) {
             // });
           } else if (Array.isArray(keywordData)) {
             // 키워드 배열인 경우
-            context.langgraph.augmentedKeywords.value = keywordData.map((keyword, index) => ({
-              id: `keyword-${index}`,
-              text: keyword,
-              category: 'augmented'
-            }));
-            context.langgraph.extractedKeywords.value = keywordData;
+            const normalizedKeywords = normalizeAugmentedKeywords(keywordData, context);
+            context.langgraph.augmentedKeywords.value = normalizedKeywords;
+            context.langgraph.extractedKeywords.value = normalizedKeywords.map(keyword => keyword.text);
             // console.log('✅ 키워드 복원 완료:', keywordData.length, '개');
           }
         } catch (error) {
@@ -409,7 +443,11 @@ export function restoreLanggraphFromCurrentMessages(context) {
               context.langgraph.originalInput.value = keywordData.originalInput;
             }
             if (keywordData.augmentedKeywords) {
-              context.langgraph.augmentedKeywords.value = keywordData.augmentedKeywords;
+              const normalizedKeywords = normalizeAugmentedKeywords(keywordData.augmentedKeywords, context);
+              context.langgraph.augmentedKeywords.value = normalizedKeywords;
+              if (!context.langgraph.extractedKeywords.value && normalizedKeywords.length > 0) {
+                context.langgraph.extractedKeywords.value = normalizedKeywords.map(keyword => keyword.text);
+              }
             }
             if (keywordData.searchResults) {
               context.langgraph.searchResults.value = keywordData.searchResults;
@@ -429,12 +467,9 @@ export function restoreLanggraphFromCurrentMessages(context) {
             }
           } else if (Array.isArray(keywordData)) {
             // 키워드 배열인 경우
-            context.langgraph.augmentedKeywords.value = keywordData.map((keyword, index) => ({
-              id: `keyword-${index}`,
-              text: keyword,
-              category: 'augmented'
-            }));
-            context.langgraph.extractedKeywords.value = keywordData;
+            const normalizedKeywords = normalizeAugmentedKeywords(keywordData, context);
+            context.langgraph.augmentedKeywords.value = normalizedKeywords;
+            context.langgraph.extractedKeywords.value = normalizedKeywords.map(keyword => keyword.text);
           }
         } catch (error) {
           console.warn('키워드 파싱 실패:', error);

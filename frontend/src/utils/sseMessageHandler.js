@@ -9,43 +9,7 @@
  * @param {Object} context - Vue 컴포넌트 컨텍스트 (this)
  */
 
-function logSSEDebugInfo(data) {
-  if (!data || typeof data !== 'object') {
-    console.warn('⚠️ [SSE] 로그를 위한 데이터가 올바르지 않음:', data)
-    return
-  }
-
-  const generatorId = data.generator_id || data.generatorId || 'unknown'
-  const stage = data.stage || 'unknown'
-  const status = data.status || 'unknown'
-  const nodeName = data.node_name || data.node || 'n/a'
-  const eventType = data.event || 'n/a'
-  const timestamp = data.timestamp || data.time || null
-
-  const groupLabel = `📡 [SSE] stage=${stage} status=${status} generator=${generatorId}`
-
-  try {
-    console.groupCollapsed(groupLabel)
-    console.log('🔖 generator_id:', generatorId)
-    console.log('🧩 stage:', stage)
-    console.log('📍 status:', status)
-    console.log('🧱 node:', nodeName)
-    console.log('🎯 event:', eventType)
-    if (timestamp) {
-      console.log('⏱️ timestamp:', timestamp)
-    }
-    console.log('📦 has result:', !!data.result)
-    if (data.result) {
-      console.log('📦 result keys:', Object.keys(data.result))
-    }
-    console.log('📝 raw message:', data)
-  } finally {
-    console.groupEnd()
-  }
-}
-
 export async function handleSSEMessage(data, context) {
-  logSSEDebugInfo(data)
   // 추가 질문은 별도 처리되므로 이 로직 제거
   // if (context.langgraph.isFollowupQuestion.value && (data.stage === 'A' || data.stage === 'B' || data.stage === 'C' || data.stage === 'D' || data.stage === 'E')) {
   //   console.log('🔒 추가 질문 중 - 랭그래프 영역 업데이트 방지:', data.stage);

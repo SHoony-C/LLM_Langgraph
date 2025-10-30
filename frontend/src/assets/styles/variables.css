@@ -28,6 +28,9 @@
   --accent-hover: #5a67d8;
   --glass-bg: rgba(255, 255, 255, 0.1);
   --glass-border: rgba(255, 255, 255, 0.2);
+  --glass-blur-strong: blur(20px);
+  --glass-blur-medium: blur(10px);
+  --glass-blur-light: blur(5px);
 }
 
 .dark-mode {
@@ -57,4 +60,16 @@
   --accent-hover: #5a67d8;
   --glass-bg: rgba(255, 255, 255, 0.1);
   --glass-border: rgba(255, 255, 255, 0.2);
+  
+  --glass-blur-strong: blur(20px);
+  --glass-blur-medium: blur(10px);
+  --glass-blur-light: blur(5px);
+}
+
+html.edge-performance {
+  --glass-bg: rgba(26, 32, 44, 0.92);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur-strong: none;
+  --glass-blur-medium: none;
+  --glass-blur-light: none;
 }

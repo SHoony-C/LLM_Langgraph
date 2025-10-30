@@ -32,8 +32,8 @@
   top: 0;
   z-index: 15;
   background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--glass-blur-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
   border-bottom: 1px solid var(--glass-border);
   height: 60px;
   width: 100%;
@@ -124,8 +124,8 @@
   top: 100%;
   right: 0;
   background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--glass-blur-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
   border-radius: 16px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   margin-top: 8px;
@@ -269,8 +269,8 @@
   display: flex;
   align-items: flex-start;
   background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--glass-blur-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
   border-radius: 24px;
   padding: 12px 12px 12px 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
@@ -340,4 +340,31 @@
   color: white;
   text-transform: uppercase;
   filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.5));
+}
+
+/* Edge 전용 성능 최적화 */
+html.edge-performance .header,
+html.edge-performance .user-popup,
+html.edge-performance .user-avatar,
+html.edge-performance .user-popup-avatar,
+html.edge-performance .user-popup-icon,
+html.edge-performance .title,
+html.edge-performance .menu-item,
+html.edge-performance .user-popup-name,
+html.edge-performance .user-initial,
+html.edge-performance .user-avatar::before,
+html.edge-performance .user-avatar::after,
+html.edge-performance .user-popup-avatar::before {
+  animation: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+html.edge-performance .header,
+html.edge-performance .user-popup,
+html.edge-performance .user-popup-header,
+html.edge-performance .menu-item,
+html.edge-performance .user-popup-avatar,
+html.edge-performance .user-avatar {
+  transition: none !important;
 }

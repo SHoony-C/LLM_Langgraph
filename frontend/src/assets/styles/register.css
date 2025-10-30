@@ -79,8 +79,8 @@
   max-width: 90vw;
   padding: 40px;
   background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: var(--glass-blur-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
   border-radius: 20px;
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -151,7 +151,7 @@
   border-radius: 12px;
   font-size: 1rem;
   background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
+  backdrop-filter: var(--glass-blur-medium);
   color: white;
   outline: none;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -176,7 +176,7 @@
   background: rgba(255, 107, 107, 0.1);
   border: 1px solid rgba(255, 107, 107, 0.3);
   border-radius: 10px;
-  backdrop-filter: blur(10px);
+  backdrop-filter: var(--glass-blur-medium);
   animation: slideInUp 0.4s ease-out;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
@@ -337,4 +337,29 @@
   animation: float 15s ease-in-out infinite;
   z-index: -1;
   pointer-events: none;
+}
+
+/* Edge 전용 성능 최적화 */
+html.edge-performance .auth-page,
+html.edge-performance .auth-card,
+html.edge-performance .auth-card::before,
+html.edge-performance .auth-card::after,
+html.edge-performance .auth-card-header,
+html.edge-performance .auth-card-title,
+html.edge-performance .auth-card-subtitle,
+html.edge-performance .form-group,
+html.edge-performance .form-group input,
+html.edge-performance .form-group label,
+html.edge-performance .form-group input:focus + label,
+html.edge-performance .form-group input:not(:placeholder-shown) + label,
+html.edge-performance .password-strength,
+html.edge-performance .password-strength div,
+html.edge-performance .auth-card-footer,
+html.edge-performance .floating-particles,
+html.edge-performance .auth-actions,
+html.edge-performance .auth-actions button {
+  animation: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  transition: none !important;
 }

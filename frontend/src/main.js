@@ -5,6 +5,12 @@ import App from './App.vue'
 import Home from './views/Home.vue'
 import ChatHistory from './views/ChatHistory.vue'
 
+// Edge 브라우저에서 글래스모피즘 효과가 성능 저하를 일으켜
+// 핵심 인터페이스를 느리게 만드는 문제가 있어 감지 시 완화한다.
+if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Edg/')) {
+  document.documentElement.classList.add('edge-performance')
+}
+
 // Vue 디버깅 설정
 if (process.env.NODE_ENV === 'development') {
   // Vue DevTools 활성화 (안전한 방식)

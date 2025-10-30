@@ -696,32 +696,6 @@ async def node_rc_rag(state: SearchState) -> SearchState:
         
         generator_id = state.get('generator_id')
         if generator_id:
-            search_results = []
-            for candidate in candidates_total[:5]:  # 상위 5개만
-                payload = candidate.get("res_payload", {}) if isinstance(candidate, dict) else {}
-                if not isinstance(payload, dict):
-                    payload = {}
-
-                vector_data = payload.get("vector", {})
-                if not isinstance(vector_data, dict):
-                    vector_data = {}
-
-                image_url = extract_image_url_from_payload(payload)
-                if not image_url:
-                    image_url = extract_first_image_url(candidate.get("image_url")) if isinstance(candidate, dict) else None
-                if not image_url and isinstance(candidate, dict):
-                    image_url = extract_first_image_url(candidate.get("analysis_image_url"))
-
-                search_results.append(
-                    {
-                        "title": payload.get("document_name", "제목 없음"),
-                        "text": vector_data.get("text", "내용 없음"),
-                        "summary": vector_data.get("summary_result", "요약 없음"),
-                        "image_url": image_url,
-                        "score": candidate.get("res_score", 0) if isinstance(candidate, dict) else 0,
-                    }
-                )
-
             await yield_node_status(
                 generator_id,
                 "C",
@@ -734,7 +708,26 @@ async def node_rc_rag(state: SearchState) -> SearchState:
                         candidate.get("res_payload", {}).get("document_name", "제목 없음")
                         for candidate in candidates_total
                     ],
-                    "search_results": search_results,
+                    "search_results": [
+                        {
+                            "title": candidate.get("res_payload", {}).get("document_name", "제목 없음"),
+                            "text": candidate.get("res_payload", {}).get("vector", {}).get("text", "내용 없음"),
+                            "summary": candidate.get("res_payload", {}).get("vector", {}).get("summary_result", "요약 없음"),
+                            # "image_url": (
+                            #     # Qdrant payload 최상위에서 image_url 추출
+                            #     candidate.get("res_payload", {}).get("image_url", [""])[0] 
+                            #     if isinstance(candidate.get("res_payload", {}).get("image_url", ""), list)
+                            #     else candidate.get("res_payload", {}).get("image_url", "")
+                            # ) or (
+                            #     # vector 내부에서 image_url 추출 (폴백)
+                            #     candidate.get("res_payload", {}).get("vector", {}).get("image_url", [""])[0]
+                            #     if isinstance(candidate.get("res_payload", {}).get("vector", {}).get("image_url", ""), list)
+                            #     else candidate.get("res_payload", {}).get("vector", {}).get("image_url", "")
+                            # ),
+                            "score": candidate.get("res_score", 0)
+                        }
+                        for candidate in candidates_total[:5]  # 상위 5개만
+                    ]
                 }
             )
         
@@ -1291,7 +1284,7 @@ async def save_langgraph_result_to_db_stream(question: str, result: dict, db: Se
         # 사용자 정보 가져오기
         from app.models import User
         user = db.query(User).filter(User.id == user_id).first()
-        user_name = user.username if user and user.username else (user.loginid if user else "system")
+        user_name = user.loginid if user and user.loginid else (user.username if user else "system")
         
         print(f"[DB_SAVE_STREAM] - 사용자명: {user_name}")
         
