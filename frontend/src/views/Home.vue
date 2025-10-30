@@ -327,7 +327,7 @@ export default {
         // console.log('🔄 토큰 갱신 시작...');
         
         // 현재 토큰으로 갱신 시도
-        const response = await fetch('http://localhost:8000/api/auth/refresh', {
+        const response = await fetch('https://report-collection/api/auth/refresh', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -365,11 +365,7 @@ export default {
       
       try {
         // 새 탭에서 이미지 열기
-        const newTab = window.open(imageUrl, '_blank', 'noopener,noreferrer');
-        if (!newTab) {
-          // 팝업이 차단된 경우 사용자에게 알림
-          alert('팝업이 차단되었습니다. 브라우저 설정에서 팝업을 허용해주세요.');
-        }
+        window.open(imageUrl, '_blank', 'noopener,noreferrer');
       } catch (error) {
         console.error('이미지 열기 실패:', error);
         // 대체 방법: 현재 탭에서 이미지로 이동
@@ -484,7 +480,7 @@ export default {
             console.log('🔄 메시지 없음 - API로 메시지 가져오기:', newConversation.id);
             setTimeout(async () => {
               try {
-                const response = await fetch(`http://localhost:8000/api/conversations/${newConversation.id}/messages`, {
+                const response = await fetch(`https://report-collection/api/conversations/${newConversation.id}/messages`, {
                   method: 'GET',
                   headers: {
                     'Authorization': `Bearer ${localStorage.getItem('access_token')}`,

@@ -36,7 +36,7 @@ async function processOAuthToken(idToken, state) {
     const requestBody = `id_token=${encodeURIComponent(idToken)}&state=${encodeURIComponent(state)}`;
     
     // 백엔드의 acs 엔드포인트로 id_token 전송
-    const response = await fetch('http://localhost:8000/api/auth/acs', {
+    const response = await fetch('https://report-collection/api/auth/acs', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -188,7 +188,7 @@ async function processOAuthToken(idToken, state) {
     // 오류 발생 시 samsung SSO로 리다이렉트
     setTimeout(() => {
       try {
-        window.location.replace('http://localhost:8000/api/auth/auth_sh');
+        window.location.replace('https://report-collection/api/auth/auth_sh');
       } catch (redirectError) {
         console.error('[AUTH] SSO 리다이렉트 실패:', redirectError);
       }
@@ -331,7 +331,7 @@ function initializeAuthFromStorage() {
         });
 
         // 인증 상태 확인을 위한 API 호출
-        fetch('http://localhost:8000/api/auth/me', {
+        fetch('https://report-collection/api/auth/me', {
           method: 'GET',
           headers: { 
             'Authorization': `Bearer ${accessToken}`,
@@ -702,7 +702,7 @@ const store = createStore({
     },
     
     async register(context, userData) {
-      const response = await fetch('http://localhost:8000/api/auth/register', {
+      const response = await fetch('https://report-collection/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData)
@@ -724,7 +724,7 @@ const store = createStore({
       formData.append('username', username);
       formData.append('password', password);
       
-      const response = await fetch('http://localhost:8000/api/auth/token', {
+      const response = await fetch('https://report-collection/api/auth/token', {
         method: 'POST',
         body: formData
       });
@@ -736,7 +736,7 @@ const store = createStore({
       
       const data = await response.json();
       
-      const userResponse = await fetch('http://localhost:8000/api/auth/me', {
+      const userResponse = await fetch('https://report-collection/api/auth/me', {
         headers: { 'Authorization': `Bearer ${data.access_token}` }
       });
       
@@ -784,7 +784,7 @@ const store = createStore({
           headers['Authorization'] = `Bearer ${jwtToken}`;
         }
         
-        const response = await fetch('http://localhost:8000/api/conversations', {
+        const response = await fetch('https://report-collection/api/conversations', {
           headers,
           credentials: 'include' // 쿠키 포함
         });
@@ -889,7 +889,7 @@ const store = createStore({
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
         
-        const response = await fetch('http://localhost:8000/api/conversations', {
+        const response = await fetch('https://report-collection/api/conversations', {
           method: 'POST',
           headers,
           credentials: 'include',
@@ -933,7 +933,7 @@ const store = createStore({
       try {
         if (!state.isAuthenticated) return;
         
-        const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
+        const response = await fetch(`https://report-collection/api/conversations/${conversationId}`, {
           method: 'DELETE',
           headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
           credentials: 'include' // 쿠키 포함
@@ -962,7 +962,7 @@ const store = createStore({
           return;
         }
         
-        const response = await fetch(`http://localhost:8000/api/conversations/${state.currentConversation.id}/messages`, {
+        const response = await fetch(`https://report-collection/api/conversations/${state.currentConversation.id}/messages`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1052,7 +1052,7 @@ const store = createStore({
           return;
         }
         
-        const response = await fetch(`http://localhost:8000/api/messages/${cleanMessageId}/feedback`, {
+        const response = await fetch(`https://report-collection/api/messages/${cleanMessageId}/feedback`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1126,7 +1126,7 @@ const store = createStore({
         const currentConversationId = state.currentConversation.id;
         
         // 1. 먼저 영구 message_id 발급
-        const prepareResponse = await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/messages/prepare`, {
+        const prepareResponse = await fetch(`https://report-collection/api/conversations/${currentConversationId}/messages/prepare`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1171,7 +1171,7 @@ const store = createStore({
         
         // 에러 처리 개선을 위해 try-catch 사용
         try {
-        const response = await fetch('http://localhost:8000/api/stream', {
+        const response = await fetch('https://report-collection/api/stream', {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1220,7 +1220,7 @@ const store = createStore({
                 
                 // 3. 스트리밍 완료 시 메시지 내용 업데이트
                 try {
-                  const completeResponse = await fetch(`http://localhost:8000/api/messages/${preparedData.assistantMessage.id}/complete`, {
+                  const completeResponse = await fetch(`https://report-collection/api/messages/${preparedData.assistantMessage.id}/complete`, {
                     method: 'PUT',
                     headers: { 
                       'Content-Type': 'application/json',
@@ -1275,7 +1275,7 @@ const store = createStore({
         
           // 백엔드 저장 시도
           try {
-        const saveResponse = await fetch(`http://localhost:8000/api/conversations/${currentConversationId}/messages/stream`, {
+        const saveResponse = await fetch(`https://report-collection/api/conversations/${currentConversationId}/messages/stream`, {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
@@ -1413,10 +1413,10 @@ const requireAuth = (to, from, next) => {
           // samsung SSO로 리다이렉트
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8000/api/auth/auth_sh');
+              window.location.replace('https://report-collection/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8000/api/auth/auth_sh';
+                window.location.href = 'https://report-collection/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }
@@ -1532,10 +1532,10 @@ const requireAuth = (to, from, next) => {
           // samsung SSO로 리다이렉트
           setTimeout(() => {
             try {
-              window.location.replace('http://localhost:8000/api/auth/auth_sh');
+              window.location.replace('https://report-collection/api/auth/auth_sh');
             } catch (error) {
               try {
-                window.location.href = 'http://localhost:8000/api/auth/auth_sh';
+                window.location.href = 'https://report-collection/api/auth/auth_sh';
               } catch (error2) {
                 console.error('SSO 리다이렉트 실패:', error2);
               }
@@ -1558,10 +1558,10 @@ const requireAuth = (to, from, next) => {
   // samsung SSO로 리다이렉트
   setTimeout(() => {
     try {
-      window.location.replace('http://localhost:8000/api/auth/auth_sh');
+      window.location.replace('https://report-collection/api/auth/auth_sh');
     } catch (error) {
       try {
-        window.location.href = 'http://localhost:8000/api/auth/auth_sh';
+        window.location.href = 'https://report-collection/api/auth/auth_sh';
       } catch (error2) {
         alert('로그인이 필요합니다. 수동으로 로그인 페이지로 이동해주세요.');
       }
@@ -1616,7 +1616,7 @@ const router = createRouter({
               };
               
               // 백엔드에서 인증 토큰 발급 받기
-              fetch('http://localhost:8000/api/auth/token', {
+              fetch('https://report-collection/api/auth/token', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json'
