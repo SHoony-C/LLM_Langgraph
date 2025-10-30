@@ -35,6 +35,154 @@ from sqlalchemy.orm import Session
 
 from datetime import datetime
 
+INTERNAL_IMAGE_PREFIX = "/appdata/RC/images/"
+
+
+def build_public_image_url(raw_path: Optional[str]) -> Optional[str]:
+    """Convert an internal image path to a public URL."""
+    if not raw_path or not isinstance(raw_path, str):
+        return None
+
+    trimmed = raw_path.strip()
+    if not trimmed:
+        return None
+
+    if trimmed.startswith(("http://", "https://")):
+        return trimmed
+
+    base_url = (IMAGE_BASE_URL or "").rstrip('/')
+    if base_url and trimmed.startswith(base_url):
+        return trimmed
+
+    if trimmed.startswith(INTERNAL_IMAGE_PREFIX):
+        suffix = trimmed[len(INTERNAL_IMAGE_PREFIX):].lstrip('/')
+        prefix = (IMAGE_PATH_PREFIX or "").strip()
+        if prefix and not prefix.startswith('/'):
+            prefix = f"/{prefix}"
+        prefix = prefix.rstrip('/')
+        public_url = f"{base_url}{prefix}/{suffix}" if prefix else f"{base_url}/{suffix}"
+        print(f"[IMAGE] 내부 경로 변환: {trimmed} -> {public_url}")
+        return public_url
+
+    return trimmed
+
+
+def normalize_image_field(value: Any) -> Any:
+    """Normalize image URL fields while preserving the original structure."""
+    if isinstance(value, list):
+        normalized_list = []
+        for item in value:
+            public_url = build_public_image_url(item)
+            if public_url:
+                normalized_list.append(public_url)
+        return normalized_list or value
+    if isinstance(value, str):
+        return build_public_image_url(value) or value
+    return value
+
+
+def extract_first_image_url(value: Any) -> Optional[str]:
+    """Extract the first valid image URL from a string or list."""
+    if isinstance(value, list):
+        for item in value:
+            public_url = build_public_image_url(item)
+            if public_url:
+                return public_url
+    elif isinstance(value, str):
+        public_url = build_public_image_url(value)
+        if public_url:
+            return public_url
+    return None
+
+
+def normalize_payload_images(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a payload copy with normalized image URL fields."""
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized_payload = dict(payload)
+
+    if 'image_url' in normalized_payload:
+        normalized_payload['image_url'] = normalize_image_field(normalized_payload.get('image_url'))
+
+    vector_data = normalized_payload.get('vector')
+    if isinstance(vector_data, dict):
+        normalized_vector = dict(vector_data)
+        if 'image_url' in normalized_vector:
+            normalized_vector['image_url'] = normalize_image_field(normalized_vector.get('image_url'))
+        normalized_payload['vector'] = normalized_vector
+
+    return normalized_payload
+
+
+def extract_image_url_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+    """Extract a normalized image URL from a Qdrant payload."""
+    if not isinstance(payload, dict):
+        return None
+
+    image_url = extract_first_image_url(payload.get('image_url'))
+    if image_url:
+        return image_url
+
+    vector_data = payload.get('vector')
+    if isinstance(vector_data, dict):
+        return extract_first_image_url(vector_data.get('image_url'))
+
+    return None
+
+
+def normalize_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize all image URLs inside the candidate list."""
+    normalized_candidates = []
+    for candidate in candidates or []:
+        if not isinstance(candidate, dict):
+            normalized_candidates.append(candidate)
+            continue
+
+        candidate_copy = dict(candidate)
+        payload = candidate_copy.get('res_payload')
+        if isinstance(payload, dict):
+            candidate_copy['res_payload'] = normalize_payload_images(payload)
+
+        normalized_candidates.append(candidate_copy)
+
+    return normalized_candidates
+
+
+def normalize_langgraph_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure LangGraph results include public image URLs."""
+    if not isinstance(result, dict):
+        return result
+
+    if isinstance(result.get('candidates_total'), list):
+        result['candidates_total'] = normalize_candidates(result.get('candidates_total'))
+
+    response = result.get('response')
+    if isinstance(response, dict):
+        top_document = response.get('top_document')
+        fallback_payload = None
+        if isinstance(top_document, dict):
+            payload = top_document.get('res_payload')
+            if isinstance(payload, dict):
+                normalized_payload = normalize_payload_images(payload)
+                top_document['res_payload'] = normalized_payload
+                fallback_payload = normalized_payload
+
+        analysis_url = response.get('analysis_image_url')
+        public_url = build_public_image_url(analysis_url) if isinstance(analysis_url, str) else None
+        if public_url:
+            response['analysis_image_url'] = public_url
+        elif isinstance(analysis_url, list):
+            list_url = extract_first_image_url(analysis_url)
+            if list_url:
+                response['analysis_image_url'] = list_url
+        elif fallback_payload:
+            fallback_url = extract_image_url_from_payload(fallback_payload)
+            if fallback_url:
+                response['analysis_image_url'] = fallback_url
+
+    return result
+
 
 # Create router 
 router = APIRouter()
@@ -211,7 +359,8 @@ async def yield_node_status(generator_id: str, node_name: str, status: str, data
             "stage": node_name,
             "status": status,
             "result": data,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": asyncio.get_event_loop().time(),
+            "generator_id": generator_id
         }
         
         # print(f"[SSE] 📤 전송할 메시지: {message}")
@@ -379,7 +528,7 @@ async def node_rc_keyword(state: SearchState) -> SearchState:
             
             # 비동기 호출
             response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 stream=True,
             )
@@ -534,6 +683,8 @@ async def node_rc_rag(state: SearchState) -> SearchState:
             max_results = min(len(candidates_total), max(1, min(10, len(candidates_total))))
             candidates_total = candidates_total[:max_results]
         
+        candidates_total = normalize_candidates(candidates_total)
+
         print(f"[RAG] 최종 검색 결과 (상위 5건):")
         for i, candidate in enumerate(candidates_total):
             title = candidate.get('res_payload', {}).get('document_name', '제목 없음')
@@ -562,17 +713,17 @@ async def node_rc_rag(state: SearchState) -> SearchState:
                             "title": candidate.get("res_payload", {}).get("document_name", "제목 없음"),
                             "text": candidate.get("res_payload", {}).get("vector", {}).get("text", "내용 없음"),
                             "summary": candidate.get("res_payload", {}).get("vector", {}).get("summary_result", "요약 없음"),
-                            "image_url": (
-                                # Qdrant payload 최상위에서 image_url 추출
-                                candidate.get("res_payload", {}).get("image_url", [""])[0] 
-                                if isinstance(candidate.get("res_payload", {}).get("image_url", ""), list)
-                                else candidate.get("res_payload", {}).get("image_url", "")
-                            ) or (
-                                # vector 내부에서 image_url 추출 (폴백)
-                                candidate.get("res_payload", {}).get("vector", {}).get("image_url", [""])[0]
-                                if isinstance(candidate.get("res_payload", {}).get("vector", {}).get("image_url", ""), list)
-                                else candidate.get("res_payload", {}).get("vector", {}).get("image_url", "")
-                            ),
+                            # "image_url": (
+                            #     # Qdrant payload 최상위에서 image_url 추출
+                            #     candidate.get("res_payload", {}).get("image_url", [""])[0] 
+                            #     if isinstance(candidate.get("res_payload", {}).get("image_url", ""), list)
+                            #     else candidate.get("res_payload", {}).get("image_url", "")
+                            # ) or (
+                            #     # vector 내부에서 image_url 추출 (폴백)
+                            #     candidate.get("res_payload", {}).get("vector", {}).get("image_url", [""])[0]
+                            #     if isinstance(candidate.get("res_payload", {}).get("vector", {}).get("image_url", ""), list)
+                            #     else candidate.get("res_payload", {}).get("vector", {}).get("image_url", "")
+                            # ),
                             "score": candidate.get("res_score", 0)
                         }
                         for candidate in candidates_total[:5]  # 상위 5개만
@@ -733,7 +884,8 @@ async def node_rc_answer(state: SearchState) -> SearchState:
             
             # 상위 1건의 문서 정보 추출
             top_result = candidates_top[0]
-            top_payload = top_result.get('res_payload', {})
+            top_payload = normalize_payload_images(top_result.get('res_payload', {}))
+            top_result['res_payload'] = top_payload
             
             # 문서 제목과 내용 추출
             document_title = top_payload.get('document_name', '제목 없음')
@@ -790,7 +942,7 @@ async def node_rc_answer(state: SearchState) -> SearchState:
                     
                     # 실시간 스트리밍 응답 처리
                     response = await client.chat.completions.create(
-                        model="gpt-3.5-turbo",
+                        model="openai/gpt-oss-120b",
                         messages=messages,
                         stream=True,
                     )
@@ -859,71 +1011,40 @@ async def node_rc_answer(state: SearchState) -> SearchState:
             if top_payload:
                 print(f"[Answer] 🖼️ [IMAGE URL] top_payload 키 목록: {list(top_payload.keys())}")
                 print(f"[Answer] 🖼️ [IMAGE URL] top_payload 전체: {top_payload}")
-            
-            image_url = None
-            if top_result and top_payload:
-                # Qdrant payload 구조: payload 최상위에 image_url이 배열로 저장됨
-                # 예: image_url: [0:"/appdata/RC/images/daily_note_1_whole.jpg"]
-                if 'image_url' in top_payload:
-                    img_url = top_payload.get('image_url', '')
-                    print(f"[Answer] 🖼️ [IMAGE URL] payload에서 image_url 발견: {img_url} (타입: {type(img_url).__name__})")
-                    
-                    if isinstance(img_url, list) and len(img_url) > 0:
-                        # 배열의 첫 번째 값 사용
-                        image_url = img_url[0]
-                        print(f"[Answer] ✅ [IMAGE URL] Qdrant에서 추출한 이미지 URL (배열): {image_url}")
-                    elif isinstance(img_url, str) and img_url:
-                        image_url = img_url
-                        print(f"[Answer] ✅ [IMAGE URL] Qdrant에서 추출한 이미지 URL (문자열): {image_url}")
+
+            image_url = extract_image_url_from_payload(top_payload) if top_payload else None
+
+            if image_url:
+                print(f"[Answer] ✅ [IMAGE URL] Qdrant에서 추출한 이미지 URL: {image_url}")
+            elif top_result and top_payload:
+                print(f"[Answer] ⚠️ [IMAGE URL] Qdrant payload에서 이미지 URL을 찾을 수 없어 폴백을 시도합니다.")
+                doc_title = top_payload.get('document_name', '')
+                doc_index = top_result.get('res_id', 0)
+
+                if doc_title and doc_index:
+                    import urllib.parse
+                    # .txt 확장자 제거하고 _whole.jpg로 대체
+                    if doc_title.endswith('.txt'):
+                        doc_title_without_ext = doc_title[:-4]  # .txt 제거
+                        image_filename = f"{doc_title_without_ext}_whole.jpg"
                     else:
-                        print(f"[Answer] ⚠️ [IMAGE URL] image_url 값이 예상과 다름: {img_url}")
+                        # 확장자가 없거나 다른 경우 그대로 사용
+                        image_filename = doc_title
+
+                    safe_title = urllib.parse.quote(image_filename, safe='')
+                    image_url = f"{IMAGE_BASE_URL}{IMAGE_PATH_PREFIX}/{safe_title}"
+                    print(f"[Answer] 🖼️ [IMAGE URL] 폴백: 문서명 기반으로 생성된 이미지 URL: {image_url}")
                 else:
-                    print(f"[Answer] 🖼️ [IMAGE URL] payload 최상위에 image_url 없음, vector 내부 확인")
-                
-                # vector 내부에도 확인
-                if not image_url and 'vector' in top_payload and isinstance(top_payload['vector'], dict):
-                    vector_data = top_payload['vector']
-                    print(f"[Answer] 🖼️ [IMAGE URL] vector 데이터 키 목록: {list(vector_data.keys())}")
-                    
-                    if 'image_url' in vector_data:
-                        img_url = vector_data.get('image_url', '')
-                        print(f"[Answer] 🖼️ [IMAGE URL] vector에서 image_url 발견: {img_url} (타입: {type(img_url).__name__})")
-                        
-                        if isinstance(img_url, list) and len(img_url) > 0:
-                            image_url = img_url[0]
-                            print(f"[Answer] ✅ [IMAGE URL] Qdrant vector에서 추출한 이미지 URL (배열): {image_url}")
-                        elif isinstance(img_url, str) and img_url:
-                            image_url = img_url
-                            print(f"[Answer] ✅ [IMAGE URL] Qdrant vector에서 추출한 이미지 URL (문자열): {image_url}")
-                    else:
-                        print(f"[Answer] ⚠️ [IMAGE URL] vector 내부에도 image_url 없음")
-                
-                # Qdrant에 image_url이 없으면 문서명 기반으로 생성 (폴백)
-                if not image_url:
-                    print(f"[Answer] 🖼️ [IMAGE URL] Qdrant에 image_url 없음 - 폴백 모드 진입")
-                    doc_title = top_payload.get('document_name', '')
-                    doc_index = top_result.get('res_id', 0)
-                    
-                    if doc_title and doc_index:
-                        import urllib.parse
-                        import os
-                        # .txt 확장자 제거하고 _whole.jpg로 대체
-                        if doc_title.endswith('.txt'):
-                            doc_title_without_ext = doc_title[:-4]  # .txt 제거
-                            image_filename = f"{doc_title_without_ext}_whole.jpg"
-                        else:
-                            # 확장자가 없거나 다른 경우 그대로 사용
-                            image_filename = doc_title
-                        
-                        safe_title = urllib.parse.quote(image_filename, safe='')
-                        image_url = f"{IMAGE_BASE_URL}{IMAGE_PATH_PREFIX}/{safe_title}"
-                        print(f"[Answer] 🖼️ [IMAGE URL] 폴백: 문서명 기반으로 생성된 이미지 URL: {image_url}")
-                    else:
-                        print(f"[Answer] ⚠️ [IMAGE URL] 폴백 실패: doc_title 또는 doc_index 없음")
-                else:
-                    print(f"[Answer] ✅ [IMAGE URL] 최종 추출 완료: {image_url}")
+                    print(f"[Answer] ⚠️ [IMAGE URL] 폴백 실패: doc_title 또는 doc_index 없음")
             else:
                 print(f"[Answer] ⚠️ [IMAGE URL] top_result 또는 top_payload 없음 - image_url 추출 실패")
+
+            if image_url:
+                public_image_url = build_public_image_url(image_url) or image_url
+                if public_image_url != image_url:
+                    print(f"[Answer] 🖼️ [IMAGE URL] 공개 URL로 변환: {public_image_url}")
+                image_url = public_image_url
+                print(f"[Answer] ✅ [IMAGE URL] 최종 추출 완료: {image_url}")
 
             # LangGraph 실행 결과를 위한 완전한 응답 구조
             response = {
@@ -1117,7 +1238,7 @@ async def save_langgraph_result_to_db_stream(question: str, result: dict, db: Se
         
         if isinstance(response, dict):
             answer = response.get('answer', '')
-            image_url = response.get('analysis_image_url')
+            image_url = build_public_image_url(response.get('analysis_image_url'))
         else:
             answer = str(response) if response else ''
             image_url = None
@@ -1129,26 +1250,13 @@ async def save_langgraph_result_to_db_stream(question: str, result: dict, db: Se
         # 검색 결과 전체 정보를 JSON 형식으로 저장
         db_contents_list = []
         if candidates_total:
+            candidates_total = normalize_candidates(candidates_total)
             for idx, candidate in enumerate(candidates_total[:5]):  # 상위 5개만 저장
                 payload = candidate.get('res_payload', {})
                 vector_data = payload.get('vector', {})
                 
                 # image_url 처리 - Qdrant 구조에 맞게 수정
-                image_url_value = ''
-                if 'image_url' in payload:
-                    # payload 최상위에 image_url이 있는 경우
-                    img_url = payload.get('image_url', '')
-                    if isinstance(img_url, list) and len(img_url) > 0:
-                        image_url_value = img_url[0]  # 배열의 첫 번째 값 사용
-                    elif isinstance(img_url, str):
-                        image_url_value = img_url
-                elif isinstance(vector_data, dict) and 'image_url' in vector_data:
-                    # vector 내부에 image_url이 있는 경우
-                    img_url = vector_data.get('image_url', '')
-                    if isinstance(img_url, list) and len(img_url) > 0:
-                        image_url_value = img_url[0]
-                    elif isinstance(img_url, str):
-                        image_url_value = img_url
+                image_url_value = extract_image_url_from_payload(payload) or ''
                 
                 db_content = {
                     'rank': idx + 1,
@@ -1208,40 +1316,20 @@ async def save_langgraph_result_to_db_stream(question: str, result: dict, db: Se
         if db:
             db.rollback()
 
-async def save_langgraph_result_to_db(question: str, response: dict, keywords: list, candidates_total: list, image_url: str = None):
-    """LangGraph 실행 결과를 DB에 직접 저장 (랭그래프 전용)"""
-    try:
-        print(f"[DB_SAVE] LangGraph 결과 DB 저장 시작 (랭그래프 전용)")
-        print(f"[DB_SAVE] 질문: {question}")
-        print(f"[DB_SAVE] 응답: {response.get('answer', '')[:100]}...")
-        print(f"[DB_SAVE] 키워드: {keywords}")
-        print(f"[DB_SAVE] 문서: {len(candidates_total)}건")
+        image_url = build_public_image_url(image_url) if image_url else None
         print(f"[DB_SAVE] 이미지 URL: {image_url}")
-        
+
         # 검색 결과 전체 정보를 JSON 형식으로 저장
         db_contents_list = []
         if candidates_total:
+            candidates_total = normalize_candidates(candidates_total)
             for idx, candidate in enumerate(candidates_total[:5]):  # 상위 5개만 저장
                 payload = candidate.get('res_payload', {})
                 vector_data = payload.get('vector', {})
-                
+
                 # image_url 처리 - Qdrant 구조에 맞게 수정
-                image_url_value = ''
-                if 'image_url' in payload:
-                    # payload 최상위에 image_url이 있는 경우
-                    img_url = payload.get('image_url', '')
-                    if isinstance(img_url, list) and len(img_url) > 0:
-                        image_url_value = img_url[0]  # 배열의 첫 번째 값 사용
-                    elif isinstance(img_url, str):
-                        image_url_value = img_url
-                elif isinstance(vector_data, dict) and 'image_url' in vector_data:
-                    # vector 내부에 image_url이 있는 경우
-                    img_url = vector_data.get('image_url', '')
-                    if isinstance(img_url, list) and len(img_url) > 0:
-                        image_url_value = img_url[0]
-                    elif isinstance(img_url, str):
-                        image_url_value = img_url
-                
+                image_url_value = extract_image_url_from_payload(payload) or ''
+
                 db_content = {
                     'rank': idx + 1,
                     'document_name': payload.get('document_name', ''),
@@ -1357,6 +1445,7 @@ async def execute_langgraph(request: StreamRequest, db: Session = Depends(get_db
         print(f"[LangGraph] 초기 상태: {initial_state}")
         
         result = await langgraph_instance.ainvoke(initial_state)
+        result = normalize_langgraph_result(result)
         
         print(f"[LangGraph] ✅ 실행 완료")
         
@@ -1440,8 +1529,9 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
             # 테스트 메시지 먼저 전송
             test_message = {
                 "stage": "TEST",
-                "status": "started", 
-                "result": {"message": "SSE 연결 테스트"}
+                "status": "started",
+                "result": {"message": "SSE 연결 테스트"},
+                "generator_id": generator_id
             }
             print(f"[SSE] 🧪 테스트 메시지 전송")
             await generator.send_message(test_message)
@@ -1456,6 +1546,7 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                     print(f"[LANGGRAPH] 🔍 실행 전 제너레이터 상태: active={generator.is_active}, queue_size={generator.message_queue.qsize()}")
                     
                     result = await langgraph_instance.ainvoke(initial_state)
+                    result = normalize_langgraph_result(result)
                     
                     print(f"[LANGGRAPH] ✅ LangGraph 실행 완료")
                     print(f"[LANGGRAPH] 📊 결과 요약: keyword={len(result.get('keyword', []))}개, candidates={len(result.get('candidates_total', []))}개")
@@ -1486,9 +1577,9 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                                 
                                 # 이미지 URL이 있는 경우 추가 처리
                                 if isinstance(result.get('response'), dict):
-                                    analysis_image_url = result.get('response', {}).get('analysis_image_url')
+                                    analysis_image_url = build_public_image_url(result.get('response', {}).get('analysis_image_url'))
                                     if analysis_image_url:
-                                        # 이미지 URL을 별도 필드에 저장하거나 메시지에 포함
+                                        existing_message.image = analysis_image_url
                                         print(f"[LANGGRAPH] 🖼️ 분석 이미지 URL 저장: {analysis_image_url}")
                                 
                                 db.commit()
@@ -1513,10 +1604,11 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                         print(f"[LANGGRAPH] ⚠️ [IMAGE URL DONE 메시지] response가 dict가 아님")
                     
                     done_message = {
-                        "stage": "DONE", 
+                        "stage": "DONE",
                         "result": result,  # 전체 LangGraph 결과 포함
                         "keyword": result.get('keyword', []),
-                        "candidates_total": result.get('candidates_total', [])
+                        "candidates_total": result.get('candidates_total', []),
+                        "generator_id": generator_id
                     }
                     print(f"[LANGGRAPH] 🖼️ [IMAGE URL DONE 메시지] done_message에 포함된 analysis_image_url: {done_message.get('result', {}).get('response', {}).get('analysis_image_url') if isinstance(done_message.get('result', {}).get('response'), dict) else 'N/A'}")
                     print(f"[LANGGRAPH] 📤 DONE 메시지 전송 시도 (큐 크기: {generator.message_queue.qsize()})")
@@ -1528,6 +1620,7 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                     import traceback
                     print(f"[LANGGRAPH] 오류 상세: {traceback.format_exc()}")
                     error_message = {"stage": "ERROR", "error": str(e)}
+                    error_message["generator_id"] = generator_id
                     print(f"[LANGGRAPH] 📤 ERROR 메시지 전송 시도")
                     await generator.send_message(error_message)
                 finally:
@@ -1583,7 +1676,14 @@ async def execute_langgraph_stream(request: StreamRequest, db: Session = Depends
                     if heartbeat_count % 10 == 0:
                         print(f"[SSE] 💓 하트비트 #{heartbeat_count} - 메시지:{message_count}, 큐:{current_queue_size}, 태스크완료:{task_done}")
                     
-                    yield f"data: {json.dumps({'heartbeat': True, 'count': heartbeat_count, 'queue_size': current_queue_size, 'task_done': task_done})}\n\n"
+                    heartbeat_payload = {
+                        'heartbeat': True,
+                        'count': heartbeat_count,
+                        'queue_size': current_queue_size,
+                        'task_done': task_done,
+                        'generator_id': generator_id,
+                    }
+                    yield f"data: {json.dumps(heartbeat_payload)}\n\n"
                     continue
                 except Exception as e:
                     print(f"[SSE] ❌ 메시지 처리 오류: {e}")

@@ -144,6 +144,8 @@ class SSEGenerator:
         """메시지를 큐에 추가"""
         if self.is_active:
             self.message_count += 1
+            if isinstance(message, dict):
+                message.setdefault("generator_id", self.generator_id)
             # print(f"[SSE_GEN] 📥 메시지 #{self.message_count} 큐에 추가: {message.get('stage', 'unknown')}:{message.get('status', 'unknown')}")
             await self.message_queue.put(message)
             # print(f"[SSE_GEN] ✅ 메시지 큐 추가 완료, 현재 큐 크기: {self.message_queue.qsize()}")

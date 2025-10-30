@@ -199,7 +199,7 @@ def get_conversation_context(conversation_id: int, db: Session) -> dict:
         }
 
 # 추가 질문 스트리밍 처리 엔드포인트
-@router.post("/langgraph/followup/stream")
+@router.post("/followup/stream")
 async def execute_followup_question_stream(request: StreamRequest, http_request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """추가 질문 스트리밍 처리 - 기존 RAG 컨텍스트와 대화 히스토리 활용"""
     try:
@@ -562,7 +562,7 @@ async def get_streaming_response_with_db_save(messages: List[Dict], request: Req
             
         # 비동기 호출
         response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 stream=True,
             )
@@ -712,7 +712,7 @@ async def get_streaming_response_async(messages: List[Dict], request: Request, g
             
         # 비동기 호출
         response = await client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="openai/gpt-oss-120b",
                 messages=messages,
                 stream=True,
             )
