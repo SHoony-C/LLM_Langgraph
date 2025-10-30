@@ -36,7 +36,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
 
     // 1. 먼저 영구 message_id 발급
 
-    const prepareResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
+    const prepareResponse = await fetch(`https://report-collection/api/conversations/${conversationId}/messages/prepare`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -78,13 +78,15 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
     context.$store.commit('updateStreamingMessage', '');
     context.$store.commit('setIsStreaming', false);
 
+
     // DOM 업데이트 대기
     await context.$nextTick();
 
     // 스트리밍 상태 시작 (메시지가 실제로 시작될 때만)
     context.$store.commit('setIsStreaming', true);
     context.$store.commit('updateStreamingMessage', '');
-    context.sse.streamingVisible.value = false; // 초기에는 숨김
+    context.sse.streamingVisible.value = true; // 스트리밍 영역을 미리 확보
+    console.log('👀 추가 질문 스트리밍 영역 표시 시작');
 
     // DOM 업데이트 대기
     await context.$nextTick();
@@ -128,7 +130,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
       console.log('⚠️ 현재 대화 또는 메시지가 없습니다');
     }
 
-    // SSE 요청 전송
+    // 스트림 요청 전송
     const response = await fetch('https://report-collection/api/normal_llm/followup/stream', {
       method: 'POST',
       headers: {
@@ -142,47 +144,104 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    // SSE 스트림 처리
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
     let assistantResponse = '';
+    const contentType = response.headers.get('content-type') || '';
+    const isEventStream = contentType.includes('text/event-stream');
+    console.log('📡 추가 질문 스트림 콘텐츠 타입:', contentType || '알 수 없음');
 
-    let done = false;
-    while (!done) {
-      const { done: streamDone, value } = await reader.read();
-      done = streamDone;
-      
-      if (done) {
-        console.log('📡 추가 질문 SSE 스트림 완료');
-        break;
-      }
+    if (isEventStream) {
+      // 이벤트 스트림 처리 (SSE)
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let streamClosed = false;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      const processBuffer = () => {
+        let boundaryIndex = buffer.indexOf('\n\n');
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          
-          if (data === '[DONE]') {
-            console.log('📡 추가 질문 SSE 스트림 종료');
-            break;
+        while (boundaryIndex !== -1) {
+          const rawEvent = buffer.slice(0, boundaryIndex);
+          buffer = buffer.slice(boundaryIndex + 2);
+
+          const dataLines = rawEvent
+            .split('\n')
+            .filter(line => line.startsWith('data: '));
+
+          if (dataLines.length === 0) {
+            boundaryIndex = buffer.indexOf('\n\n');
+            continue;
+          }
+
+          const dataPayload = dataLines
+            .map(line => line.slice(6))
+            .join('\n');
+
+          if (dataPayload === '[DONE]') {
+            console.log('📡 추가 질문 스트리밍 종료 신호 수신');
+            streamClosed = true;
+            return;
           }
 
           try {
-            const messageData = JSON.parse(data);
-            
+            const messageData = JSON.parse(dataPayload);
+
             if (messageData.content) {
               assistantResponse += messageData.content;
               context.$store.commit('updateStreamingMessage', assistantResponse);
-              // 첫 번째 콘텐츠가 도착했을 때만 스트리밍 영역 표시
+
               if (assistantResponse.length > 0 && !context.sse.streamingVisible.value) {
                 context.sse.streamingVisible.value = true;
+                console.log('👀 추가 질문 스트리밍 영역 활성화 (데이터 수신)');
               }
             }
           } catch (parseError) {
-            console.warn('📡 추가 질문 SSE 메시지 파싱 오류:', parseError);
+            console.warn('📡 추가 질문 스트리밍 데이터 파싱 오류:', parseError, '\n📄 원본 데이터:', dataPayload);
           }
+
+          boundaryIndex = buffer.indexOf('\n\n');
+        }
+      };
+
+      while (!streamClosed) {
+        const { done: streamDone, value } = await reader.read();
+
+        if (value) {
+          buffer += decoder.decode(value, { stream: !streamDone });
+          processBuffer();
+        }
+
+        if (streamDone) {
+          buffer += decoder.decode(new Uint8Array(), { stream: false });
+          processBuffer();
+          console.log('📡 추가 질문 이벤트 스트리밍 완료');
+          break;
+        }
+      }
+    } else {
+      // 일반 텍스트 스트리밍 처리
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+
+        if (value) {
+          const chunkText = decoder.decode(value, { stream: !streamDone });
+          if (chunkText) {
+            assistantResponse += chunkText;
+            context.$store.commit('updateStreamingMessage', assistantResponse);
+
+            if (assistantResponse.length > 0 && !context.sse.streamingVisible.value) {
+              context.sse.streamingVisible.value = true;
+              console.log('👀 추가 질문 스트리밍 영역 활성화 (텍스트 데이터)');
+            }
+          }
+        }
+
+        if (streamDone) {
+          console.log('📡 추가 질문 텍스트 스트리밍 완료');
+          break;
         }
       }
     }
@@ -211,7 +270,7 @@ export async function executeAdditionalQuestionFlow(inputText, conversationId, c
       // 3. 스트리밍 완료 시 메시지 내용 업데이트 (UI 업데이트용)
       // 중요: user 메시지의 ans 필드에 AI 답변을 업데이트
       try {
-        const completeResponse = await fetch(`http://localhost:8000/api/messages/${preparedData.userMessage.id}/complete`, {
+        const completeResponse = await fetch(`https://report-collection/api/messages/${preparedData.userMessage.id}/complete`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',

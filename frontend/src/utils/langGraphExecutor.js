@@ -91,7 +91,7 @@ async function prepareMessageForLangGraph(inputText, context) {
 
     console.log('📋 prepare_message API 호출:', requestData);
 
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages/prepare`, {
+    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages/prepare`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -150,7 +150,7 @@ export async function executeLangGraphWithSSE(inputText, context, permanentMessa
     console.log('🚀 SSE 스트리밍 요청 시작:', requestData);
 
     // 랭그래프는 최초 질문만 처리 (추가 질문은 Home.vue에서 분기 처리)
-    const endpoint = 'http://localhost:8000/api/langgraph/stream';
+    const endpoint = 'https://report-collection/api/langgraph/stream';
     
     console.log('🎯 랭그래프 엔드포인트:', endpoint);
     console.log('🎯 isFollowupQuestion:', context.langgraph.isFollowupQuestion.value);
@@ -174,34 +174,78 @@ export async function executeLangGraphWithSSE(inputText, context, permanentMessa
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
+    let buffer = '';
+    let eventData = '';
     let done = false;
+
     while (!done) {
       const { done: streamDone, value } = await reader.read();
       done = streamDone;
-      
-      if (done) {
-        console.log('📡 SSE 스트림 완료');
-        break;
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
       }
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const rawLine = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const line = rawLine.trimEnd();
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          
-          if (data === '[DONE]') {
-            console.log('📡 SSE 스트림 종료');
-            break;
+        if (!line) {
+          if (eventData) {
+            const payload = eventData.trim();
+            eventData = '';
+
+            if (!payload) {
+              continue;
+            }
+
+            if (payload === '[DONE]') {
+              console.log('📡 SSE 스트림 종료');
+              done = true;
+              break;
+            }
+
+            try {
+              const messageData = JSON.parse(payload);
+              await handleSSEMessage(messageData, context);
+            } catch (parseError) {
+              console.warn('📡 SSE 메시지 파싱 오류:', parseError, '\n📄 원본 데이터:', payload);
+            }
           }
 
-          try {
-            const messageData = JSON.parse(data);
-            await handleSSEMessage(messageData, context);
-          } catch (parseError) {
-            console.warn('📡 SSE 메시지 파싱 오류:', parseError);
+          continue;
+        }
+
+        if (line.startsWith('data:')) {
+          const dataPortion = line.slice(5).trimStart();
+          if (eventData) {
+            eventData += '\n';
           }
+          eventData += dataPortion;
+        }
+      }
+
+      if (done) {
+        if (eventData) {
+          const payload = eventData.trim();
+          eventData = '';
+
+          if (payload && payload !== '[DONE]') {
+            try {
+              const messageData = JSON.parse(payload);
+              await handleSSEMessage(messageData, context);
+            } catch (parseError) {
+              console.warn('📡 SSE 메시지 파싱 오류 (스트림 종료 시):', parseError, '\n📄 원본 데이터:', payload);
+            }
+          }
+        }
+
+        if (buffer.trim() === '[DONE]') {
+          console.log('📡 SSE 스트림 종료 (잔여 버퍼)');
+        } else {
+          console.log('📡 SSE 스트림 완료');
         }
       }
     }
@@ -470,7 +514,7 @@ async function saveLangGraphMessage(result, context) {
     console.log('🖼️ [FRONTEND IMAGE 전송] 최종 requestBody.image 값:', requestBody.image);
     console.log('📤 [FRONTEND IMAGE 전송] 요청 본문 전체:', JSON.stringify(requestBody, null, 2));
     
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -489,7 +533,7 @@ async function saveLangGraphMessage(result, context) {
         const conversationTitle = question.length > 50 ? question.substring(0, 50) + '...' : question;
         
         try {
-          const titleUpdateResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
+          const titleUpdateResponse = await fetch(`https://report-collection/api/conversations/${conversationId}`, {
             method: 'PUT',
             headers: { 
               'Content-Type': 'application/json',
@@ -542,7 +586,7 @@ async function saveLangGraphMessageToBackend(question, answer, conversationId, c
       assistant_response: answer
     };
             
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

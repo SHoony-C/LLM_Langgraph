@@ -7,6 +7,29 @@
  * @param {Object} result - LangGraph 실행 결과
  * @param {Object} context - Vue 컴포넌트 컨텍스트
  */
+
+function extractImageUrl(source) {
+  if (!source) {
+    return '';
+  }
+
+  if (Array.isArray(source)) {
+    for (const candidate of source) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    return '';
+  }
+
+  if (typeof source === 'string') {
+    return source.trim();
+  }
+
+  return '';
+}
+
+
 export async function saveLangGraphMessage(result, context) {
   try {
     if (!context.$store.state.currentConversation) {
@@ -47,11 +70,24 @@ export async function saveLangGraphMessage(result, context) {
     }
     
     // 이미지 URL 추출 (여러 소스에서 시도)
-    let imageUrl = context.langgraph.analysisImageUrl.value;
+    let imageUrl = context.langgraph.analysisImageUrl.value || '';
+    if (typeof imageUrl === 'string') {
+      imageUrl = imageUrl.trim();
+    } else {
+      imageUrl = '';
+    }
     if (!imageUrl && result.result && result.result.response && result.result.response.analysis_image_url) {
       imageUrl = result.result.response.analysis_image_url;
     } else if (!imageUrl && result.result && result.result.analysis_image_url) {
       imageUrl = result.result.analysis_image_url;
+    }
+
+    if (typeof imageUrl === 'string') {
+      imageUrl = imageUrl.trim();
+    }
+
+    if (imageUrl) {
+      console.log('🖼️ [SAVE] 백엔드 제공 이미지 URL 사용:', imageUrl);
     }
     
     // LangGraph 전체 상태를 JSON으로 저장 (복원을 위해)
@@ -78,22 +114,18 @@ export async function saveLangGraphMessage(result, context) {
         
         // image_url 처리 - Qdrant 구조에 맞게
         let image_url_value = '';
-        if (payload.image_url) {
-          const img_url = payload.image_url;
-          if (Array.isArray(img_url) && img_url.length > 0) {
-            image_url_value = img_url[0];
-          } else if (typeof img_url === 'string') {
-            image_url_value = img_url;
-          }
-        } else if (vector_data.image_url) {
-          const img_url = vector_data.image_url;
-          if (Array.isArray(img_url) && img_url.length > 0) {
-            image_url_value = img_url[0];
-          } else if (typeof img_url === 'string') {
-            image_url_value = img_url;
-          }
+        const payloadImage = extractImageUrl(payload.image_url);
+        const vectorImage = extractImageUrl(vector_data.image_url);
+        image_url_value = payloadImage || vectorImage;
+
+        if (image_url_value) {
+          console.log('🖼️ [SAVE] 문서 이미지 추출:', {
+            rank: idx + 1,
+            document: payload.document_name || candidate.title || '',
+            image: image_url_value
+          });
         }
-        
+
         const db_content = {
           rank: idx + 1,
           document_name: payload.document_name || candidate.title || '',
@@ -110,6 +142,14 @@ export async function saveLangGraphMessage(result, context) {
         db_contents_list.push(db_content);
       }
     }
+
+    if (!imageUrl && db_contents_list.length > 0) {
+      imageUrl = db_contents_list[0].image_url || '';
+      if (imageUrl) {
+        console.log('🖼️ [SAVE] 첫 번째 문서 이미지로 message.image 설정:', imageUrl);
+      }
+    }
+
     
     const db_contents_json = JSON.stringify(db_contents_list);
     
@@ -126,7 +166,7 @@ export async function saveLangGraphMessage(result, context) {
     });
     
     // 메시지 생성 API 호출
-    const response = await fetch(`http://localhost:8000/api/conversations/${conversationId}/messages`, {
+    const response = await fetch(`https://report-collection/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -156,7 +196,7 @@ export async function saveLangGraphMessage(result, context) {
         const conversationTitle = question.length > 50 ? question.substring(0, 50) + '...' : question;
         
         try {
-          const titleUpdateResponse = await fetch(`http://localhost:8000/api/conversations/${conversationId}`, {
+          const titleUpdateResponse = await fetch(`https://report-collection/api/conversations/${conversationId}`, {
             method: 'PUT',
             headers: { 
               'Content-Type': 'application/json',
