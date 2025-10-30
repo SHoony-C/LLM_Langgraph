@@ -22,10 +22,29 @@
           <h4>📖 전체 내용</h4>
           <p class="full-text">{{ result.res_payload?.vector?.text || result.text || '내용 없음' }}</p>
         </div>
-        <div v-if="getImageUrls(result.res_payload?.vector?.image_url || result.image_url).length > 0" class="popup-section">
+        <div
+          v-if="
+            getImageUrls(
+              result.res_payload?.vector?.image_url ||
+              result.res_payload?.image_url ||
+              result.image_url ||
+              result.analysis_image_url
+            ).length > 0
+          "
+          class="popup-section"
+        >
           <h4>🖼️ 관련 이미지</h4>
           <div class="popup-image-container">
-            <div v-for="(imageUrl, index) in getImageUrls(result.res_payload?.vector?.image_url || result.image_url)" :key="index" class="image-item">
+            <div
+              v-for="(imageUrl, index) in getImageUrls(
+                result.res_payload?.vector?.image_url ||
+                result.res_payload?.image_url ||
+                result.image_url ||
+                result.analysis_image_url
+              )"
+              :key="index"
+              class="image-item"
+            >
               <img 
                 :src="getFullImageUrl(imageUrl)" 
                 :alt="`${result.res_payload?.document_name || result.title} - 이미지 ${index + 1}`"
@@ -72,24 +91,30 @@ export default {
       this.$emit('close');
     },
     getImageUrls(imageUrl) {
-      // console.log('🖼️ 원본 이미지 URL 데이터:', imageUrl);
+      console.log('🖼️ 팝업 이미지 URL 원본 데이터:', {
+        payloadVector: this.result?.res_payload?.vector?.image_url,
+        payloadRoot: this.result?.res_payload?.image_url,
+        direct: this.result?.image_url,
+        analysis: this.result?.analysis_image_url,
+        incoming: imageUrl
+      });
       
       if (!imageUrl) return [];
       
       // 배열인 경우
       if (Array.isArray(imageUrl)) {
         const processedUrls = imageUrl.map(url => {
-          // console.log('🔍 처리 중인 URL:', url);
+          console.log('🔍 처리 중인 URL:', url);
           // "0:"/appdata/RC/images/daily_note_19_whole.jpg" 형식에서 실제 URL 추출
           if (typeof url === 'string' && url.includes(':')) {
             const extractedUrl = url.split(':').slice(1).join(':'); // 첫 번째 콜론 이후 부분
-            // console.log('✅ 추출된 URL:', extractedUrl);
+            console.log('✅ 추출된 URL:', extractedUrl);
             return extractedUrl;
           }
           return url;
         }).filter(url => url); // 빈 문자열 제거
         
-        // console.log('🎯 최종 처리된 URL 배열:', processedUrls);
+        console.log('🎯 최종 처리된 URL 배열:', processedUrls);
         return processedUrls;
       }
       
@@ -97,7 +122,7 @@ export default {
       if (typeof imageUrl === 'string') {
         if (imageUrl.includes(':')) {
           const extractedUrl = imageUrl.split(':').slice(1).join(':');
-          // console.log('✅ 문자열에서 추출된 URL:', extractedUrl);
+          console.log('✅ 문자열에서 추출된 URL:', extractedUrl);
           return extractedUrl ? [extractedUrl] : [];
         }
         return [imageUrl];
@@ -107,7 +132,7 @@ export default {
     },
     getFullImageUrl(url) {
       if (!url) return '';
-      // console.log('🔗 변환 전 URL:', url);
+      console.log('🔗 변환 전 URL:', url);
       // "/appdata/RC/images/" → "https://10.172.107.182/imageview/"
       const fullUrl = url.replace(/^\/appdata\/RC\/images\//, 'https://10.172.107.182/imageview/');
       // console.log('🔗 변환 후 URL:', fullUrl);
@@ -126,7 +151,13 @@ export default {
   },
   watch: {
     show(newVal) {
-      if (newVal && this.result?.image_url) {
+      if (
+        newVal &&
+        (this.result?.res_payload?.vector?.image_url ||
+          this.result?.res_payload?.image_url ||
+          this.result?.image_url ||
+          this.result?.analysis_image_url)
+      ) {
         this.imageLoading = true;
         this.imageError = false;
       }
@@ -159,12 +190,13 @@ export default {
 .search-result-popup {
   background: white;
   border-radius: 12px;
-  width: 90%;
-  max-width: 800px;
-  max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
   animation: slideUp 0.3s ease;
+  width: 70vw;
+  max-width: 70vw;
+  height: 80vh;
+  max-height: 80vh;
 }
 
 @keyframes slideUp {
@@ -272,7 +304,7 @@ export default {
 
 .popup-image {
   max-width: 100%;
-  max-height: 400px;
+  max-height: 100%;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
